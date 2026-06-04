@@ -32,8 +32,20 @@ local defaults = {
     max_file_list = 120,
   },
   ui = {
+    reuse_output = true,
+    auto_scroll = true,
     output_cmd = "botright vertical 80new",
     filetype = "markdown",
+    buffer_keymaps = {
+      apply = "a",
+      reject = "r",
+      next = "n",
+      patch = "p",
+      run = "t",
+      done = "d",
+      skip = "s",
+      close = "q",
+    },
   },
   safety = {
     allow_dangerous_commands = false,

@@ -162,3 +162,16 @@ codex.md
   `:AIPlanDone` to advance the plan.
 - `:AIPing` sends a tiny non-streaming request to the configured model and shows
   provider, model, elapsed time, and response.
+
+AI output buffers are reused by default and expose local normal-mode keys:
+
+```text
+a apply pending edit or patch
+r reject pending action
+n preview next agent step
+p preview next patch step
+t preview next command/test step
+d mark active plan step done
+s skip active plan step
+q close AI window
+```

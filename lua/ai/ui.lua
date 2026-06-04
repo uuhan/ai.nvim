@@ -6,6 +6,8 @@ local runner = require("ai.runner")
 local M = {
   pending_edit = nil,
   pending_patch = nil,
+  output_bufnr = nil,
+  output_winid = nil,
 }
 
 local function split_lines(text)
@@ -29,11 +31,87 @@ local function set_scratch_options(bufnr, filetype)
   vim.bo[bufnr].filetype = filetype or config.get().ui.filetype
 end
 
-function M.open_output(title, text, filetype)
-  vim.cmd(config.get().ui.output_cmd)
+local function valid_window(winid)
+  return winid and vim.api.nvim_win_is_valid(winid)
+end
+
+local function valid_buffer(bufnr)
+  return bufnr and vim.api.nvim_buf_is_valid(bufnr)
+end
+
+local function scroll_to_bottom(bufnr)
+  if not config.get().ui.auto_scroll then
+    return
+  end
+
+  for _, winid in ipairs(vim.fn.win_findbuf(bufnr)) do
+    if vim.api.nvim_win_is_valid(winid) then
+      local line_count = math.max(1, vim.api.nvim_buf_line_count(bufnr))
+      pcall(vim.api.nvim_win_set_cursor, winid, { line_count, 0 })
+    end
+  end
+end
+
+local function map_buffer_keys(bufnr)
+  local keys = config.get().ui.buffer_keymaps or {}
+  local mappings = {
+    apply = { rhs = function() require("ai.ui").apply_pending() end, desc = "AI apply pending edit or patch" },
+    reject = { rhs = function() require("ai.ui").reject_pending() end, desc = "AI reject pending action" },
+    next = { rhs = function() require("ai.commands").plan_next() end, desc = "AI preview next plan step" },
+    patch = { rhs = function() require("ai.commands").plan_apply() end, desc = "AI preview next patch step" },
+    run = { rhs = function() require("ai.commands").plan_run() end, desc = "AI preview next command step" },
+    done = { rhs = function() require("ai.commands").plan_done() end, desc = "AI mark plan step done" },
+    skip = { rhs = function() require("ai.commands").plan_skip() end, desc = "AI skip plan step" },
+    close = {
+      rhs = function()
+        local winid = vim.api.nvim_get_current_win()
+        pcall(vim.api.nvim_win_close, winid, true)
+        if M.output_winid == winid then
+          M.output_winid = nil
+        end
+      end,
+      desc = "Close AI window",
+    },
+  }
+
+  for name, spec in pairs(mappings) do
+    local lhs = keys[name]
+    if lhs and lhs ~= "" then
+      vim.keymap.set("n", lhs, spec.rhs, {
+        buffer = bufnr,
+        nowait = true,
+        silent = true,
+        desc = spec.desc,
+      })
+    end
+  end
+end
+
+local function focus_or_open_output()
+  local opts = config.get().ui
+  if opts.reuse_output and valid_buffer(M.output_bufnr) then
+    if valid_window(M.output_winid) then
+      vim.api.nvim_set_current_win(M.output_winid)
+    else
+      vim.cmd(opts.output_cmd)
+      M.output_winid = vim.api.nvim_get_current_win()
+      vim.api.nvim_win_set_buf(M.output_winid, M.output_bufnr)
+    end
+    return M.output_bufnr
+  end
+
+  vim.cmd(opts.output_cmd)
   local bufnr = vim.api.nvim_get_current_buf()
+  M.output_bufnr = bufnr
+  M.output_winid = vim.api.nvim_get_current_win()
+  return bufnr
+end
+
+function M.open_output(title, text, filetype)
+  local bufnr = focus_or_open_output()
   set_scratch_options(bufnr, filetype)
-  vim.api.nvim_buf_set_name(bufnr, "ai://" .. title)
+  pcall(vim.api.nvim_buf_set_name, bufnr, "ai://" .. title)
+  map_buffer_keys(bufnr)
 
   M.set_output(bufnr, title, text, filetype)
   return bufnr
@@ -54,6 +132,7 @@ function M.set_output(bufnr, title, text, filetype)
 
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
   vim.bo[bufnr].modifiable = false
+  scroll_to_bottom(bufnr)
   return bufnr
 end
 

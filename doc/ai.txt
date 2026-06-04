@@ -89,6 +89,16 @@ Config:
   :AIConfig                 Show resolved ai.nvim config.
   :AIRules                  Show included project rules.
 
+AI output buffers are reused by default. Local normal-mode keys:
+  a                         Apply pending edit or patch.
+  r                         Reject pending action.
+  n                         Preview next agent step.
+  p                         Preview next patch step.
+  t                         Preview next command or test step.
+  d                         Mark active plan step done.
+  s                         Skip active plan step.
+  q                         Close AI window.
+
 ==============================================================================
 PROJECT RULES                                                        *ai-rules*
 
