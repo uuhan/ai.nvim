@@ -29,6 +29,7 @@ local commands = {
   "AIReviewDiff",
   "AIProject",
   "AIChat",
+  "AIPing",
   "AIConfig",
 }
 

@@ -54,7 +54,8 @@ local function parse_chat_response(stdout)
   local content = message and message.content
   local text = text_from_content(content)
   if text == "" then
-    return nil, "Provider response did not include choices[1].message.content"
+    local finish_reason = choice and choice.finish_reason or "unknown"
+    return nil, "Provider response did not include choices[1].message.content; finish_reason=" .. finish_reason
   end
 
   return text, nil, decoded
@@ -113,6 +114,8 @@ local function make_request(messages, opts, stream)
     provider_url(provider),
     "-H",
     "Content-Type: application/json",
+    "--data-binary",
+    "@-",
   }
 
   if stream then

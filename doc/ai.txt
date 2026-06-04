@@ -85,6 +85,7 @@ Chat:
   :AIChatReset              Clear chat history.
 
 Config:
+  :AIPing                  Send a tiny request to test provider/model health.
   :AIConfig                 Show resolved ai.nvim config.
   :AIRules                  Show included project rules.
 

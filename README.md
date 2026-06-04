@@ -127,6 +127,7 @@ Chat:
 Configuration and rules:
 
 ```vim
+:AIPing
 :AIConfig
 :AIRules
 ```
@@ -159,3 +160,5 @@ codex.md
 - `:AIAgent` generates a plan only. It does not apply patches or run commands.
   Use `:AIPlanApply` with `:AIApply`, or `:AIPlanRun` with `:AIRun`, then
   `:AIPlanDone` to advance the plan.
+- `:AIPing` sends a tiny non-streaming request to the configured model and shows
+  provider, model, elapsed time, and response.

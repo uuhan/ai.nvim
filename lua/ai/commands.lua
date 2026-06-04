@@ -605,6 +605,53 @@ function M.chat_reset()
   ui.notify("AI chat history cleared.")
 end
 
+function M.ping()
+  local provider = config.get().provider
+  local started = vim.uv and vim.uv.hrtime() or vim.loop.hrtime()
+  local bufnr = ui.open_output("ping", table.concat({
+    "# AI ping",
+    "",
+    "Pinging provider...",
+    "",
+    "Base URL: " .. provider.base_url,
+    "Model: " .. provider.model,
+  }, "\n"))
+
+  client.chat({
+    { role = "system", content = "You are a health check endpoint. Reply with exactly: pong" },
+    { role = "user", content = "ping" },
+  }, {
+    stream = false,
+    max_tokens = 64,
+    temperature = false,
+  }, function(err, text)
+    local elapsed_ms = math.floor(((vim.uv and vim.uv.hrtime() or vim.loop.hrtime()) - started) / 1000000)
+    if err then
+      ui.set_output(bufnr, "ping-error", table.concat({
+        "# AI ping failed",
+        "",
+        "Base URL: " .. provider.base_url,
+        "Model: " .. provider.model,
+        ("Elapsed: %d ms"):format(elapsed_ms),
+        "",
+        err,
+      }, "\n"))
+      return
+    end
+
+    ui.set_output(bufnr, "ping", table.concat({
+      "# AI ping ok",
+      "",
+      "Base URL: " .. provider.base_url,
+      "Model: " .. provider.model,
+      ("Elapsed: %d ms"):format(elapsed_ms),
+      "",
+      "Response:",
+      text,
+    }, "\n"))
+  end)
+end
+
 function M.show_rules()
   local rules = context.rules(0)
   if rules == "" then
@@ -653,6 +700,7 @@ function M.setup()
   create_command("AIPlanReset", M.plan_reset, { nargs = 0, range = false })
   create_command("AIChat", M.chat, { range = false })
   create_command("AIChatReset", M.chat_reset, { nargs = 0, range = false })
+  create_command("AIPing", M.ping, { nargs = 0, range = false })
   create_command("AIApply", ui.apply_pending, { nargs = 0, range = false })
   create_command("AIRun", ui.run_pending_command, { nargs = 0, range = false })
   create_command("AIReject", ui.reject_pending, { nargs = 0, range = false })
