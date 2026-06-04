@@ -50,6 +50,11 @@ local defaults = {
   chat = {
     width = 80,
     input_height = 3,
+    popup = {
+      width = 0.82,
+      height = 0.78,
+      border = "rounded",
+    },
     placeholder = "在此输入，Enter 发送",
     render_markdown = true,
     native_tools = true,

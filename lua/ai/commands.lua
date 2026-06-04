@@ -560,6 +560,14 @@ function M.chat(cmd)
   end
 end
 
+function M.pop_chat(cmd)
+  local prompt = cmd.args or ""
+  chat_panel.open({ system_prompt = system_prompt, layout = "float" })
+  if prompt ~= "" then
+    chat_panel.send(prompt)
+  end
+end
+
 function M.chat_toggle()
   chat_panel.toggle({ system_prompt = system_prompt })
 end
@@ -725,6 +733,7 @@ function M.setup()
   create_command("AIPlanShow", M.plan_show, { nargs = 0, range = false })
   create_command("AIPlanReset", M.plan_reset, { nargs = 0, range = false })
   create_command("AIChat", M.chat, { range = false })
+  create_command("AIPopChat", M.pop_chat, { range = false })
   create_command("AIChatToggle", M.chat_toggle, { nargs = 0, range = false })
   create_command("AIChatStop", M.chat_stop, { nargs = 0, range = false })
   create_command("AIChatReset", M.chat_reset, { nargs = 0, range = false })

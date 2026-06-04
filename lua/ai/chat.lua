@@ -8,6 +8,7 @@ local M = {
   input_bufnr = nil,
   messages_winid = nil,
   input_winid = nil,
+  layout = nil,
   active = false,
   active_request = nil,
   request_id = 0,
@@ -567,6 +568,7 @@ function M.close()
 
   M.input_winid = nil
   M.messages_winid = nil
+  M.layout = nil
 end
 
 function M.is_open()
@@ -592,6 +594,80 @@ function M.toggle(opts)
   end
 
   M.open(opts)
+end
+
+local function size_value(value, total, fallback, minimum)
+  value = tonumber(value) or fallback
+  local maximum = math.max(1, total - 2)
+  minimum = math.min(minimum or 1, maximum)
+  if value > 0 and value < 1 then
+    value = math.floor(total * value)
+  else
+    value = math.floor(value)
+  end
+  return math.max(minimum, math.min(value, maximum))
+end
+
+local function configure_chat_windows()
+  vim.wo[M.messages_winid].wrap = true
+  vim.wo[M.messages_winid].number = false
+  vim.wo[M.messages_winid].relativenumber = false
+
+  vim.wo[M.input_winid].number = false
+  vim.wo[M.input_winid].relativenumber = false
+  vim.wo[M.input_winid].wrap = true
+end
+
+local function open_side(chat_opts)
+  vim.cmd(("botright vertical %dnew"):format(chat_opts.width))
+  M.messages_winid = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(M.messages_winid, M.messages_bufnr)
+  vim.wo[M.messages_winid].winfixwidth = true
+
+  vim.api.nvim_set_current_win(M.messages_winid)
+  vim.cmd(("belowright %dnew"):format(chat_opts.input_height))
+  M.input_winid = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(M.input_winid, M.input_bufnr)
+  vim.api.nvim_win_set_height(M.input_winid, chat_opts.input_height)
+  vim.wo[M.input_winid].winfixheight = true
+  M.layout = "side"
+end
+
+local function open_float(chat_opts)
+  local popup = chat_opts.popup or {}
+  local total_width = math.max(20, vim.o.columns)
+  local total_height = math.max(10, vim.o.lines - vim.o.cmdheight - 1)
+  local width = size_value(popup.width, total_width, math.min(100, total_width - 4), 30)
+  local height = size_value(popup.height, total_height, math.min(34, total_height - 4), 10)
+  local input_height = math.max(1, tonumber(chat_opts.input_height) or 3)
+  local messages_height = math.max(3, height - input_height - 4)
+  local row = math.max(0, math.floor((total_height - height) / 2))
+  local col = math.max(0, math.floor((total_width - width) / 2))
+  local border = popup.border or "rounded"
+
+  M.messages_winid = vim.api.nvim_open_win(M.messages_bufnr, false, {
+    relative = "editor",
+    row = row,
+    col = col,
+    width = width,
+    height = messages_height,
+    border = border,
+    style = "minimal",
+    zindex = 50,
+  })
+
+  M.input_winid = vim.api.nvim_open_win(M.input_bufnr, true, {
+    relative = "editor",
+    row = row + messages_height + 2,
+    col = col,
+    width = width,
+    height = input_height,
+    border = border,
+    style = "minimal",
+    zindex = 60,
+  })
+
+  M.layout = "float"
 end
 
 function M.clear()
@@ -867,8 +943,23 @@ end
 
 function M.open(opts)
   opts = opts or {}
+  local layout = opts.layout or "side"
   M.system_prompt = opts.system_prompt or M.system_prompt or function() return "You are an AI assistant embedded in Neovim." end
   ensure_buffers()
+
+  if valid_window(M.messages_winid) and valid_window(M.input_winid) then
+    if M.layout ~= layout then
+      M.close()
+    else
+      vim.api.nvim_set_current_win(M.input_winid)
+      vim.cmd.startinsert()
+      return
+    end
+  end
+
+  if not valid_buffer(M.messages_bufnr) or not valid_buffer(M.input_bufnr) then
+    ensure_buffers()
+  end
 
   if valid_window(M.messages_winid) and valid_window(M.input_winid) then
     vim.api.nvim_set_current_win(M.input_winid)
@@ -877,23 +968,13 @@ function M.open(opts)
   end
 
   local chat_opts = config.get().chat
-  vim.cmd(("botright vertical %dnew"):format(chat_opts.width))
-  M.messages_winid = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_buf(M.messages_winid, M.messages_bufnr)
-  vim.wo[M.messages_winid].wrap = true
-  vim.wo[M.messages_winid].number = false
-  vim.wo[M.messages_winid].relativenumber = false
-  vim.wo[M.messages_winid].winfixwidth = true
+  if layout == "float" then
+    open_float(chat_opts)
+  else
+    open_side(chat_opts)
+  end
 
-  vim.api.nvim_set_current_win(M.messages_winid)
-  vim.cmd(("belowright %dnew"):format(chat_opts.input_height))
-  M.input_winid = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_buf(M.input_winid, M.input_bufnr)
-  vim.api.nvim_win_set_height(M.input_winid, chat_opts.input_height)
-  vim.wo[M.input_winid].number = false
-  vim.wo[M.input_winid].relativenumber = false
-  vim.wo[M.input_winid].wrap = true
-  vim.wo[M.input_winid].winfixheight = true
+  configure_chat_windows()
 
   map_messages_keys()
   map_input_keys()

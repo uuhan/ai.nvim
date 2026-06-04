@@ -1,5 +1,7 @@
 # ai.nvim
 
+![ai.nvim](./ai.png)
+
 A small Neovim AI assistant built around editor operations:
 
 - run prompts on a visual selection, paragraph, buffer, file, git diff, or project search context
@@ -149,6 +151,7 @@ Chat:
 
 ```vim
 :AIChat {message}            " open side chat; optional message sends immediately
+:AIPopChat {message}         " open floating chat; optional message sends immediately
 :AIChatToggle                " open or hide side chat
 :AIChatStop                  " stop the active chat request
 :AIChatReset
@@ -217,12 +220,13 @@ s skip active plan step
 q close AI window
 ```
 
-`:AIChat` opens a right-side chat panel. The top pane shows the conversation,
-and the bottom pane is the input area. Press `<CR>` or `<C-s>` in the input pane
-to send, `<C-c>` or `:AIChatStop` to stop the active request, `<C-l>` to clear
-the chat, and `<C-q>` or `q` to close the panel. The conversation pane shows a
-small status line such as `thinking`, `running tool`, or `idle`. The empty input
-pane shows configurable ghost text from `chat.placeholder`.
+`:AIChat` opens a right-side chat panel. `:AIPopChat` opens the same chat in a
+floating popup. The top pane shows the conversation, and the bottom pane is the
+input area. Press `<CR>` or `<C-s>` in the input pane to send, `<C-c>` or
+`:AIChatStop` to stop the active request, `<C-l>` to clear the chat, and
+`<C-q>` or `q` to close the panel. The conversation pane shows a small status
+line such as `thinking`, `running tool`, or `idle`. The empty input pane shows
+configurable ghost text from `chat.placeholder`.
 
 By default, AIChat can call the harness tools listed by `:AITools`. Providers
 that support OpenAI-compatible `tools` receive native tool definitions; models
@@ -239,6 +243,13 @@ Chat tool loop settings:
 ```lua
 require("ai").setup({
   chat = {
+    width = 80,
+    input_height = 3,
+    popup = {
+      width = 0.82,
+      height = 0.78,
+      border = "rounded",
+    },
     render_markdown = true,
     native_tools = true,
     tools_enabled = true,
