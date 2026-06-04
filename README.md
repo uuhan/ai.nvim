@@ -22,10 +22,10 @@ With lazy.nvim:
 
 ```lua
 {
-  "xu/ai.nvim",
+  "uuhan/ai.nvim",
   opts = {
     provider = {
-      model = "gpt-4.1-mini",
+      model = "gpt-5.4-mini",
       api_key_env = "OPENAI_API_KEY",
       base_url = "https://api.openai.com/v1",
       stream = true,
