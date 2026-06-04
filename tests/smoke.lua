@@ -72,6 +72,9 @@ local tools = require("ai.tools")
 local client = require("ai.client")
 assert(#tools.list() >= 10, "tool registry is too small")
 assert(#tools.openai_tools() == #tools.list(), "OpenAI tool export size mismatch")
+local editor_state_tool = tools.openai_tools()[1]
+local editor_state_schema_json = vim.json.encode(editor_state_tool["function"].parameters)
+assert(editor_state_schema_json:match([["properties":{}]]), "OpenAI tool schema did not encode empty properties as object")
 assert(tools.describe():match("nvim_current_buffer"), "tool description missing current buffer")
 
 local editor_state = run_tool("nvim_editor_state")

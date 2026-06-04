@@ -29,6 +29,25 @@ local function copy_spec(spec)
   }
 end
 
+local function normalize_json_schema(value, key)
+  if type(value) ~= "table" then
+    return value
+  end
+
+  if vim.tbl_isempty(value) then
+    if key == "properties" or key == "$defs" or key == "definitions" then
+      return vim.empty_dict()
+    end
+    return {}
+  end
+
+  local normalized = {}
+  for child_key, child_value in pairs(value) do
+    normalized[child_key] = normalize_json_schema(child_value, child_key)
+  end
+  return normalized
+end
+
 local function join_lines(lines)
   return table.concat(lines, "\n")
 end
@@ -709,7 +728,7 @@ function M.openai_tools()
       ["function"] = {
         name = spec.name,
         description = spec.description,
-        parameters = spec.input_schema,
+        parameters = normalize_json_schema(spec.input_schema),
       },
     })
   end
