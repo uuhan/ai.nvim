@@ -8,6 +8,7 @@ local defaults = {
     api_key_env = "OPENAI_API_KEY",
     api_key = nil,
     curl = "curl",
+    transport = "curl",
     timeout_ms = 60000,
     temperature = 0.2,
     max_tokens = nil,

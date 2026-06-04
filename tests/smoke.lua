@@ -189,6 +189,72 @@ assert(client_reasoning_text == "thinking ", "client stream did not parse reason
 assert(client_tool_delta and client_tool_delta[1].id == "call_client_stream", "client stream did not parse tool call delta")
 assert(client_finish_reason == "tool_calls", "client stream did not parse finish reason")
 
+local custom_request_seen = false
+local custom_stream_seen = false
+config.setup({
+  provider = {
+    api_key = "",
+    transport = {
+      request = function(req, cb)
+        custom_request_seen = true
+        assert(req.url:match("/chat/completions$"), "custom transport request URL mismatch")
+        assert(req.headers["Content-Type"] == "application/json", "custom transport missing JSON content type")
+        assert(req.body.messages[1].content == "custom transport", "custom transport request body mismatch")
+        cb(nil, [[{"choices":[{"message":{"content":"custom ok"}}]}]])
+      end,
+      stream = function(req, callbacks)
+        custom_stream_seen = true
+        assert(req.stream == true, "custom stream request did not mark stream mode")
+        callbacks.on_chunk([[data: {"choices":[{"delta":{"content":"custom stream"}}]}]] .. "\n")
+        callbacks.on_chunk("data: [DONE]\n")
+        callbacks.on_done()
+        return {
+          kill = function() end,
+        }
+      end,
+    },
+  },
+  chat = {
+    max_tool_model_chars = 80,
+  },
+})
+local custom_done = false
+local custom_err
+local custom_text
+client.chat({ { role = "user", content = "custom transport" } }, {}, function(err, text)
+  custom_err = err
+  custom_text = text
+  custom_done = true
+end)
+assert(vim.wait(5000, function()
+  return custom_done
+end), "timed out waiting for custom transport request")
+assert(not custom_err, custom_err)
+assert(custom_request_seen, "custom transport request was not used")
+assert(custom_text == "custom ok", "custom transport response did not parse")
+
+local custom_stream_done = false
+local custom_stream_err
+local custom_stream_text = ""
+client.chat_stream({ { role = "user", content = "custom stream" } }, {}, {
+  on_delta = function(delta)
+    custom_stream_text = custom_stream_text .. delta
+  end,
+  on_error = function(err)
+    custom_stream_err = err
+    custom_stream_done = true
+  end,
+  on_done = function()
+    custom_stream_done = true
+  end,
+})
+assert(vim.wait(5000, function()
+  return custom_stream_done
+end), "timed out waiting for custom stream transport")
+assert(not custom_stream_err, custom_stream_err)
+assert(custom_stream_seen, "custom stream transport was not used")
+assert(custom_stream_text == "custom stream", "custom stream transport response did not parse")
+
 local capture_curl = vim.fn.tempname()
 local capture_body = vim.fn.tempname()
 vim.fn.writefile({
@@ -283,6 +349,25 @@ diff --git a/test.lua b/test.lua
 })
 assert(patch_preview.status == "previewed", "patch preview tool did not preview")
 
+local buffer_replace_preview = run_tool("nvim_preview_buffer_replace", {
+  bufnr = tool_buf,
+  start_line = 1,
+  end_line = 1,
+  replacement = "local x = 2",
+})
+assert(buffer_replace_preview.status == "previewed", "buffer replace tool did not preview")
+assert(buffer_replace_preview.action == "buffer_replace", "buffer replace tool returned wrong action")
+assert(buffer_replace_preview.start_line == 1 and buffer_replace_preview.end_line == 1, "buffer replace range mismatch")
+
+local file_replace_preview = run_tool("nvim_preview_file_replace", {
+  path = "README.md",
+  start_line = 1,
+  end_line = 1,
+  replacement = "# ai.nvim",
+})
+assert(file_replace_preview.status == "previewed", "file replace tool did not preview")
+assert(file_replace_preview.action == "file_replace", "file replace tool returned wrong action")
+
 vim.cmd("AITools")
 vim.cmd(('AITool nvim_read_buffer {"bufnr":%d,"start_line":1,"end_line":1}'):format(tool_buf))
 vim.cmd("AIConfig")
@@ -304,6 +389,15 @@ assert(vim.api.nvim_buf_get_name(0):match("ai://chat%-input"), "AIChat did not f
 assert(vim.fn.maparg("<CR>", "i", false, true).buffer == 1, "AIChat send keymap missing")
 assert(vim.fn.maparg("<C-q>", "i", false, true).buffer == 1, "AIChat input close keymap missing")
 local chat = require("ai.chat")
+assert(chat.target_bufnr == tool_buf, "AIChat did not retain target editor buffer")
+local chat_state = run_tool("nvim_editor_state")
+assert(chat_state.current_buffer.name:match("ai://chat%-input"), "editor state did not report actual focused chat buffer")
+assert(chat_state.target_buffer and chat_state.target_buffer.bufnr == tool_buf, "editor state did not report target editor buffer")
+local chat_current_buffer = run_tool("nvim_current_buffer")
+assert(chat_current_buffer.bufnr == tool_buf, "current buffer tool used AIChat input instead of target buffer")
+local chat_default_read = run_tool("nvim_read_buffer", { start_line = 1, end_line = 1 })
+assert(chat_default_read.bufnr == tool_buf, "default read buffer tool used AIChat input instead of target buffer")
+assert(chat_default_read.text == "local x = 1", "default read buffer tool read wrong target text")
 assert(render_markdown_calls > 0, "AIChat did not enable render-markdown.nvim")
 local message_pos = vim.api.nvim_win_get_position(chat.messages_winid)
 local input_pos = vim.api.nvim_win_get_position(chat.input_winid)
@@ -394,6 +488,8 @@ assert(rendered_chat:match("我先看看当前 buffer。"), "AIChat did not spli
 assert(rendered_chat:match("> %[!NOTE%] Tool call: nvim_current_buffer"), "AIChat did not render embedded tool call markdown")
 assert(rendered_chat:match("> %[!NOTE%] Tool call: nvim_read_buffer"), "AIChat did not render tool call markdown")
 assert(rendered_chat:match("> %[!INFO%] Tool result: nvim_read_buffer %(returned%)"), "AIChat did not render tool result markdown")
+assert(rendered_chat:match("> summary:"), "AIChat did not render tool result summary")
+assert(rendered_chat:match("> details:"), "AIChat did not render tool result details header")
 assert(rendered_chat:match("> ```json"), "AIChat did not render tool result as fenced markdown")
 local folded_line
 local in_tool_result = false

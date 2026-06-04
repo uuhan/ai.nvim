@@ -11,7 +11,7 @@ A small Neovim AI assistant built around editor operations:
 - run prompts on a visual selection, paragraph, buffer, file, git diff, or project search context
 - preview AI edits as a unified diff before applying them
 - use LSP diagnostics, quickfix entries, git diff, and project rules as request context
-- talk to OpenAI-compatible `/v1/chat/completions` endpoints through `curl`
+- talk to OpenAI-compatible `/v1/chat/completions` endpoints through a pluggable provider transport (`curl` by default)
 
 This is intentionally not just a chat panel. The useful path is:
 
@@ -65,6 +65,7 @@ return {
         base_url = os.getenv "AI_NVIM_BASE_URL" or "https://api.deepseek.com",
         api_key_env = os.getenv "AI_NVIM_API_KEY_ENV" or "DEEPSEEK_API_KEY",
         model = os.getenv "AI_NVIM_MODEL" or "deepseek-v4-flash",
+        transport = "curl",
         stream = os.getenv "AI_NVIM_STREAM" ~= "0",
         thinking = os.getenv "AI_NVIM_THINKING" == "1",
         temperature = tonumber(os.getenv "AI_NVIM_TEMPERATURE" or "") or 0.2,
@@ -184,7 +185,8 @@ codex.md
   AI response and place them in the location list when possible.
 - `:AITools` exposes bounded Neovim context tools for the coding harness:
   editor state, buffers, files, selection, diagnostics, quickfix/location lists,
-  git diff, project files/search, and patch/command preview.
+  git diff, project files/search, patch/command preview, and buffer/file range
+  replacement previews.
 - Command execution has a small safety blocklist by default. Set
   `safety.allow_dangerous_commands = true` only if you want `:AIRun` to skip it.
 - Set `provider.stream = true` to stream normal answers and AIChat text.
@@ -195,6 +197,9 @@ codex.md
 - `provider.thinking` defaults to `false`. DeepSeek-compatible providers receive
   `thinking = { type = "disabled" }` by default; set `provider.thinking = true`
   to opt into thinking mode.
+- `provider.transport` defaults to `"curl"`. You can pass a custom transport
+  table with `request(req, cb)` and `stream(req, callbacks)` when you want to
+  route requests through another HTTP client.
 - `:AIAgent` generates a plan only. It does not apply patches or run commands.
   Use `:AIPlanApply` with `:AIApply`, or `:AIPlanRun` with `:AIRun`, then
   `:AIPlanDone` to advance the plan.
@@ -227,10 +232,13 @@ that support OpenAI-compatible `tools` receive native tool definitions; models
 that emit text JSON tool calls still work as a fallback. Tool calls and tool
 results are rendered as Markdown callouts in the conversation. Patch and command
 tools only create previews; use `:AIApply` or `:AIRun` after inspection. Tool
-result details are folded by default; use normal Neovim fold keys such as `zo`,
-`zc`, and `za` to inspect or hide them. Full tool output stays visible in the
-chat up to `chat.max_tool_result_chars`; the content sent back to the model is
-compressed separately by `chat.max_tool_model_chars`.
+results show a compact summary first, with details folded by default; use normal
+Neovim fold keys such as `zo`, `zc`, and `za` to inspect or hide them. Full tool
+output stays visible in the chat up to `chat.max_tool_result_chars`; the content
+sent back to the model is compressed separately by `chat.max_tool_model_chars`.
+When the chat input has focus, buffer-oriented tools still default to the last
+real editor buffer rather than `ai://chat-input`; `nvim_editor_state` reports
+both the actual focused buffer and the target editor buffer.
 
 Chat tool loop settings:
 

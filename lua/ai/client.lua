@@ -95,6 +95,42 @@ local function api_key(provider)
   return nil
 end
 
+local function provider_headers(provider, key)
+  local headers = {
+    ["Content-Type"] = "application/json",
+  }
+
+  if key ~= "" then
+    headers.Authorization = "Bearer " .. key
+  end
+
+  for name, value in pairs(provider.extra_headers or {}) do
+    headers[name] = value
+  end
+
+  return headers
+end
+
+local function resolve_transport(provider)
+  if type(provider.transport) == "table" then
+    return provider.transport, nil
+  end
+
+  if type(provider.request) == "function" or type(provider.stream_request) == "function" then
+    return {
+      request = provider.request,
+      stream = provider.stream_request,
+    }, nil
+  end
+
+  local name = provider.transport or "curl"
+  if name == "curl" then
+    return require("ai.transports.curl"), nil
+  end
+
+  return nil, "Unknown AI provider transport: " .. tostring(name)
+end
+
 local function make_request(messages, opts, stream)
   opts = opts or {}
   local provider = vim.tbl_deep_extend("force", config.get().provider, opts.provider or {})
@@ -102,7 +138,7 @@ local function make_request(messages, opts, stream)
 
   if key == nil then
     local key_hint = provider.api_key_env and provider.api_key_env ~= "" and ("$" .. provider.api_key_env) or "provider.api_key"
-    return nil, nil, nil, "Missing API key. Set " .. key_hint .. " or configure provider.api_key."
+    return nil, nil, nil, nil, "Missing API key. Set " .. key_hint .. " or configure provider.api_key."
   end
 
   local body = {
@@ -145,47 +181,25 @@ local function make_request(messages, opts, stream)
     body.reasoning_effort = reasoning_effort
   end
 
-  local args = {
-    provider.curl,
-    "-sS",
-    "--fail-with-body",
-    "--max-time",
-    tostring(math.max(1, math.floor((provider.timeout_ms or 60000) / 1000))),
-    "-X",
-    "POST",
-    provider_url(provider),
-    "-H",
-    "Content-Type: application/json",
-    "--data-binary",
-    "@-",
-  }
-
-  if stream then
-    table.insert(args, 2, "-N")
+  local transport, transport_err = resolve_transport(provider)
+  if transport_err then
+    return nil, nil, nil, nil, transport_err
   end
 
-  if key ~= "" then
-    table.insert(args, "-H")
-    table.insert(args, "Authorization: Bearer " .. key)
-  end
-
-  for name, value in pairs(provider.extra_headers or {}) do
-    table.insert(args, "-H")
-    table.insert(args, name .. ": " .. value)
-  end
-
-  return provider, body, args, nil
+  return provider, body, {
+    url = provider_url(provider),
+    headers = provider_headers(provider, key or ""),
+    body = body,
+    body_json = json_encode(body),
+    timeout_ms = provider.timeout_ms,
+    curl = provider.curl,
+    stream = stream,
+    provider = provider,
+  }, transport, nil
 end
 
 function M.chat(messages, opts, cb)
-  if not vim.system then
-    vim.schedule(function()
-      cb("ai.nvim requires Neovim with vim.system support.")
-    end)
-    return
-  end
-
-  local _, body, args, err = make_request(messages, opts, false)
+  local _, _, req, transport, err = make_request(messages, opts, false)
   if err then
     vim.schedule(function()
       cb(err)
@@ -193,25 +207,27 @@ function M.chat(messages, opts, cb)
     return
   end
 
-  local job = vim.system(args, { text = true, stdin = json_encode(body) }, function(obj)
+  if type(transport.request) ~= "function" then
     vim.schedule(function()
-      if obj.code ~= 0 then
-        local stderr = obj.stderr or ""
-        local stdout = obj.stdout or ""
-        cb(("Provider request failed (%s):\n%s%s"):format(obj.code, stderr, stdout))
-        return
-      end
-
-      local text, err, raw, message = parse_chat_response(obj.stdout or "")
-      if err then
-        cb(err)
-        return
-      end
-
-      cb(nil, text, raw, message)
+      cb("AI provider transport does not support non-streaming requests.")
     end)
+    return
+  end
+
+  return transport.request(req, function(request_err, stdout)
+    if request_err then
+      cb(request_err)
+      return
+    end
+
+    local text, parse_err, raw, message = parse_chat_response(stdout or "")
+    if parse_err then
+      cb(parse_err)
+      return
+    end
+
+    cb(nil, text, raw, message)
   end)
-  return job
 end
 
 local function parse_stream_line(line, callbacks)
@@ -259,7 +275,7 @@ end
 
 function M.chat_stream(messages, opts, callbacks)
   callbacks = callbacks or {}
-  local _, body, args, err = make_request(messages, opts, true)
+  local _, _, req, transport, err = make_request(messages, opts, true)
   if err then
     vim.schedule(function()
       if callbacks.on_error then
@@ -269,8 +285,16 @@ function M.chat_stream(messages, opts, callbacks)
     return
   end
 
+  if type(transport.stream) ~= "function" then
+    vim.schedule(function()
+      if callbacks.on_error then
+        callbacks.on_error("AI provider transport does not support streaming requests.")
+      end
+    end)
+    return
+  end
+
   local buffer = ""
-  local stderr = {}
 
   local function feed(chunk)
     buffer = buffer .. chunk
@@ -285,56 +309,19 @@ function M.chat_stream(messages, opts, callbacks)
     end
   end
 
-  local job = vim.fn.jobstart(args, {
-    stdout_buffered = false,
-    stderr_buffered = false,
-    on_stdout = function(_, data)
-      if data and #data > 0 then
-        vim.schedule(function()
-          feed(table.concat(data, "\n"))
-        end)
+  return transport.stream(req, {
+    on_chunk = feed,
+    on_error = callbacks.on_error,
+    on_done = function()
+      if buffer ~= "" then
+        parse_stream_line(buffer:gsub("\r$", ""), callbacks)
+        buffer = ""
       end
-    end,
-    on_stderr = function(_, data)
-      if data and #data > 0 then
-        table.insert(stderr, table.concat(data, "\n"))
+      if callbacks.on_done then
+        callbacks.on_done()
       end
-    end,
-    on_exit = function(_, code)
-      vim.schedule(function()
-        if buffer ~= "" then
-          parse_stream_line(buffer:gsub("\r$", ""), callbacks)
-          buffer = ""
-        end
-        if code ~= 0 then
-          if callbacks.on_error then
-            callbacks.on_error(("Provider stream failed (%s):\n%s"):format(code, table.concat(stderr, "\n")))
-          end
-          return
-        end
-        if callbacks.on_done then
-          callbacks.on_done()
-        end
-      end)
     end,
   })
-
-  if job <= 0 then
-    vim.schedule(function()
-      if callbacks.on_error then
-        callbacks.on_error("Failed to start curl stream.")
-      end
-    end)
-    return
-  end
-
-  vim.fn.chansend(job, json_encode(body))
-  vim.fn.chanclose(job, "stdin")
-  return {
-    kill = function()
-      pcall(vim.fn.jobstop, job)
-    end,
-  }
 end
 
 return M

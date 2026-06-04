@@ -1,6 +1,7 @@
 local config = require("ai.config")
 local context = require("ai.context")
 local runner = require("ai.runner")
+local target = require("ai.target")
 local ui = require("ai.ui")
 
 local M = {}
@@ -52,6 +53,14 @@ local function join_lines(lines)
   return table.concat(lines, "\n")
 end
 
+local function split_lines(text)
+  local lines = vim.split((text or ""):gsub("\r\n", "\n"), "\n", { plain = true })
+  if lines[#lines] == "" then
+    table.remove(lines, #lines)
+  end
+  return lines
+end
+
 local function number_arg(args, key, default, min_value, max_value)
   local value = tonumber(args[key]) or default
   if min_value then
@@ -97,9 +106,10 @@ local function option(bufnr, name, default)
 end
 
 local function valid_loaded_buffer(bufnr)
-  bufnr = tonumber(bufnr) or vim.api.nvim_get_current_buf()
-  if bufnr == 0 then
-    bufnr = vim.api.nvim_get_current_buf()
+  local err
+  bufnr, err = target.resolve_buffer(bufnr)
+  if not bufnr then
+    return nil, err
   end
   if not vim.api.nvim_buf_is_valid(bufnr) then
     return nil, "Invalid buffer: " .. tostring(bufnr)
@@ -108,6 +118,11 @@ local function valid_loaded_buffer(bufnr)
     return nil, "Buffer is not loaded: " .. tostring(bufnr)
   end
   return bufnr
+end
+
+local function target_root()
+  local bufnr = target.resolve_buffer()
+  return context.root(bufnr or 0)
 end
 
 local function buffer_info(bufnr)
@@ -145,6 +160,19 @@ local function window_info(winid)
   end)
 
   return info
+end
+
+local function cursor_for_buffer(bufnr)
+  local winid = target.resolve_window()
+  if winid and vim.api.nvim_win_get_buf(winid) == bufnr then
+    return vim.api.nvim_win_get_cursor(winid), winid
+  end
+
+  if vim.api.nvim_get_current_buf() == bufnr then
+    return vim.api.nvim_win_get_cursor(0), vim.api.nvim_get_current_win()
+  end
+
+  return nil, nil
 end
 
 local function diagnostic_item(bufnr, diagnostic)
@@ -209,6 +237,56 @@ local function json_encode(value)
   return vim.inspect(value)
 end
 
+local function preview_buffer_replace(args)
+  if type(args.replacement) ~= "string" then
+    return nil, "replacement is required"
+  end
+
+  local bufnr, err = valid_loaded_buffer(args.bufnr)
+  if not bufnr then
+    return nil, err
+  end
+
+  local line_count = vim.api.nvim_buf_line_count(bufnr)
+  if args.start_line == nil then
+    return nil, "start_line is required"
+  end
+  if args.end_line == nil then
+    return nil, "end_line is required"
+  end
+
+  local start_line = number_arg(args, "start_line", 1, 1, line_count)
+  local end_line = number_arg(args, "end_line", line_count, start_line, line_count)
+  local original_lines = vim.api.nvim_buf_get_lines(bufnr, start_line - 1, end_line, false)
+  local path = vim.api.nvim_buf_get_name(bufnr)
+
+  ui.preview_edit({
+    bufnr = bufnr,
+    path = path,
+    line1 = start_line,
+    line2 = end_line,
+    original_lines = original_lines,
+    replacement = args.replacement,
+    title = string_arg(args, "title", "tool-preview-edit"),
+  })
+
+  if not ui.pending_edit then
+    return nil, "Edit preview did not create a pending edit."
+  end
+
+  return {
+    status = "previewed",
+    action = "buffer_replace",
+    bufnr = bufnr,
+    path = path,
+    start_line = start_line,
+    end_line = end_line,
+    original_line_count = #original_lines,
+    replacement_line_count = #split_lines(args.replacement),
+    message = "Inspect the preview and run :AIApply to apply or :AIReject to discard.",
+  }
+end
+
 local function complete_sync(fn)
   return function(args, cb)
     local ok, result, err = pcall(fn, args or {})
@@ -237,12 +315,24 @@ register({
       end
     end
 
+    local target_bufnr = target.resolve_buffer()
+    local target_cursor, target_winid
+    local target_buffer
+    if target_bufnr then
+      target_cursor, target_winid = cursor_for_buffer(target_bufnr)
+      target_buffer = buffer_info(target_bufnr)
+      target_buffer.cursor = target_cursor
+      target_buffer.root = context.root(target_bufnr)
+    end
+
     return {
       cwd = vim.fn.getcwd(),
-      root = context.root(0),
+      root = target_bufnr and context.root(target_bufnr) or context.root(0),
       mode = vim.api.nvim_get_mode().mode,
       current_winid = vim.api.nvim_get_current_win(),
       current_buffer = buffer_info(vim.api.nvim_get_current_buf()),
+      target_winid = target_winid,
+      target_buffer = target_buffer,
       windows = windows,
     }
   end),
@@ -258,9 +348,12 @@ register({
     additionalProperties = false,
   },
   run = complete_sync(function()
-    local bufnr = vim.api.nvim_get_current_buf()
+    local bufnr, err = valid_loaded_buffer()
+    if not bufnr then
+      return nil, err
+    end
     local info = buffer_info(bufnr)
-    info.cursor = vim.api.nvim_win_get_cursor(0)
+    info.cursor = cursor_for_buffer(bufnr)
     info.root = context.root(bufnr)
     return info
   end),
@@ -350,12 +443,16 @@ register({
   input_schema = {
     type = "object",
     properties = {
+      bufnr = { type = "integer", description = "Buffer number. Defaults to the target editor buffer." },
       max_chars = { type = "integer", description = "Maximum returned text length. Defaults to project.max_context_chars." },
     },
     additionalProperties = false,
   },
   run = complete_sync(function(args)
-    local bufnr = vim.api.nvim_get_current_buf()
+    local bufnr, err = valid_loaded_buffer(args.bufnr)
+    if not bufnr then
+      return nil, err
+    end
     local start_mark = vim.api.nvim_buf_get_mark(bufnr, "<")
     local end_mark = vim.api.nvim_buf_get_mark(bufnr, ">")
     if start_mark[1] == 0 or end_mark[1] == 0 then
@@ -427,6 +524,7 @@ register({
     type = "object",
     properties = {
       scope = { type = "string", enum = { "current", "all" }, description = "Diagnostic scope. Defaults to current." },
+      bufnr = { type = "integer", description = "Buffer number for current scope. Defaults to the target editor buffer." },
       max_items = { type = "integer", description = "Maximum diagnostics to return. Defaults to 120." },
     },
     additionalProperties = false,
@@ -441,7 +539,12 @@ register({
     if scope == "all" then
       buffers = vim.api.nvim_list_bufs()
     else
-      buffers = { vim.api.nvim_get_current_buf() }
+      local bufnr, err = valid_loaded_buffer(args.bufnr)
+      if not bufnr then
+        cb(err)
+        return
+      end
+      buffers = { bufnr }
     end
 
     for _, bufnr in ipairs(buffers) do
@@ -537,7 +640,7 @@ register({
     additionalProperties = false,
   },
   run = function(args, cb)
-    local root = context.root(0)
+    local root = target_root()
     context.git_diff(function(err, text)
       if err then
         cb(err)
@@ -565,7 +668,7 @@ register({
     additionalProperties = false,
   },
   run = function(args, cb)
-    local root = context.root(0)
+    local root = target_root()
     local max_items = number_arg(args or {}, "max_items", config.get().project.max_file_list, 1, 2000)
     context.system_text({ "rg", "--files" }, { cwd = root }, function(err, files)
       if err then
@@ -602,7 +705,7 @@ register({
       cb("query is required")
       return
     end
-    local root = context.root(0)
+    local root = target_root()
     context.project_context(query, function(err, project_context)
       if err then
         cb(err)
@@ -641,7 +744,7 @@ register({
     ui.preview_patch({
       title = string_arg(args, "title", "tool-preview-patch"),
       text = patch_text,
-      cwd = context.root(0),
+      cwd = target_root(),
     })
 
     if not ui.pending_patch then
@@ -654,6 +757,69 @@ register({
       cwd = ui.pending_patch.cwd,
       message = "Inspect the preview and run :AIApply to apply or :AIReject to discard.",
     }
+  end),
+})
+
+register({
+  name = "nvim_preview_buffer_replace",
+  mode = "preview",
+  description = "Preview replacing a 1-based line range in a loaded buffer. It does not apply the edit; the user must run :AIApply.",
+  input_schema = {
+    type = "object",
+    required = { "start_line", "end_line", "replacement" },
+    properties = {
+      bufnr = { type = "integer", description = "Buffer number. Defaults to the current buffer." },
+      start_line = { type = "integer", description = "1-based inclusive start line to replace." },
+      end_line = { type = "integer", description = "1-based inclusive end line to replace." },
+      replacement = { type = "string", description = "Replacement text for the selected range. May be empty to delete the range." },
+      title = { type = "string", description = "Optional preview title." },
+    },
+    additionalProperties = false,
+  },
+  run = complete_sync(function(args)
+    return preview_buffer_replace(args)
+  end),
+})
+
+register({
+  name = "nvim_preview_file_replace",
+  mode = "preview",
+  description = "Preview replacing a 1-based line range in a project file. It does not apply the edit; the user must run :AIApply.",
+  input_schema = {
+    type = "object",
+    required = { "path", "start_line", "end_line", "replacement" },
+    properties = {
+      path = { type = "string", description = "Project-relative path, or an absolute path inside the project root." },
+      start_line = { type = "integer", description = "1-based inclusive start line to replace." },
+      end_line = { type = "integer", description = "1-based inclusive end line to replace." },
+      replacement = { type = "string", description = "Replacement text for the selected range. May be empty to delete the range." },
+      title = { type = "string", description = "Optional preview title." },
+    },
+    additionalProperties = false,
+  },
+  run = complete_sync(function(args)
+    local path, root = project_path(args.path)
+    if not path then
+      return nil, root
+    end
+    if vim.fn.filereadable(path) ~= 1 then
+      return nil, "File is not readable: " .. path
+    end
+
+    local bufnr = vim.fn.bufnr(path)
+    if bufnr == -1 then
+      bufnr = vim.fn.bufadd(path)
+    end
+    vim.fn.bufload(bufnr)
+
+    local result, err = preview_buffer_replace(vim.tbl_extend("force", args, { bufnr = bufnr }))
+    if err then
+      return nil, err
+    end
+    result.action = "file_replace"
+    result.root = root
+    result.path = path
+    return result
   end),
 })
 
@@ -679,7 +845,7 @@ register({
     ui.preview_command({
       title = string_arg(args, "title", "tool-preview-command"),
       command = command,
-      cwd = context.root(0),
+      cwd = target_root(),
     })
 
     if not runner.pending then

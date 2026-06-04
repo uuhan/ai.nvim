@@ -1,5 +1,6 @@
 local client = require("ai.client")
 local config = require("ai.config")
+local target = require("ai.target")
 local tools = require("ai.tools")
 
 local M = {
@@ -15,6 +16,10 @@ local M = {
   status = "idle",
   status_detail = "",
   system_prompt = nil,
+  target_bufnr = nil,
+  last_editor_winid = nil,
+  target_autocmd = false,
+  suspend_target_capture = false,
 }
 M.placeholder_ns = vim.api.nvim_create_namespace "ai.nvim.chat.placeholder"
 M.render_markdown_attached = false
@@ -28,6 +33,20 @@ local function valid_window(winid)
 end
 
 local render_history
+
+local function sync_target_state()
+  local state = target.state()
+  M.target_bufnr = state.target_bufnr
+  M.last_editor_winid = state.last_editor_winid
+end
+
+local function capture_target(winid)
+  if M.suspend_target_capture then
+    return
+  end
+  target.capture(winid)
+  sync_target_state()
+end
 
 local function split_lines(text)
   local lines = vim.split((text or ""):gsub("\r\n", "\n"), "\n", { plain = true })
@@ -105,13 +124,22 @@ local function json_objects(text)
   return objects
 end
 
-local function limit_text(text, max_chars)
+local function limit_text_info(text, max_chars)
   text = text or ""
   max_chars = tonumber(max_chars) or config.get().chat.max_tool_result_chars or 20000
   if max_chars > 0 and #text > max_chars then
-    return text:sub(1, max_chars) .. "\n[truncated]"
+    return text:sub(1, max_chars) .. "\n[truncated]", true, #text
   end
-  return text
+  return text, false, #text
+end
+
+local function short_text(text, max_chars)
+  local compact = tostring(text or ""):gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+  local limited, truncated = limit_text_info(compact, max_chars or 240)
+  if truncated then
+    return limited:gsub("\n%[truncated%]$", " ...")
+  end
+  return limited
 end
 
 local function display_limit()
@@ -192,7 +220,7 @@ local function fold_tool_results(lines)
         local cursor = index + 1
 
         while cursor <= #lines and lines[cursor]:match("^>") do
-          if lines[cursor]:match("^> result:%s*$") then
+          if lines[cursor]:match("^> details:%s*$") or lines[cursor]:match("^> result:%s*$") then
             start_line = cursor + 1
           end
           end_line = cursor
@@ -302,9 +330,25 @@ render_history = function(extra)
       local kind = message.error and "ERROR" or "INFO"
       local rows = {
         "status: " .. status,
-        "result:",
-        message.error and "```text" or "```json",
+        "summary: " .. (message.summary or status),
       }
+      if message.display_truncated then
+        table.insert(
+          rows,
+          ("visible result truncated: %d -> %d chars"):format(message.content_chars or #message.content, #message.content)
+        )
+      end
+      if message.model_truncated then
+        table.insert(
+          rows,
+          ("model backfill compressed: %d -> %d chars"):format(
+            message.model_content_chars or #(message.model_content or ""),
+            #(message.model_content or "")
+          )
+        )
+      end
+      table.insert(rows, "details:")
+      table.insert(rows, message.error and "```text" or "```json")
       vim.list_extend(rows, split_lines(message.content))
       table.insert(rows, "```")
       add_callout(lines, kind, ("Tool result: %s (%s)"):format(message.tool or "unknown", status), rows)
@@ -383,15 +427,78 @@ end
 
 local function compact_tool_result(call, err, result)
   if err then
-    return limit_text(err, model_limit())
+    return limit_text_info(err, model_limit())
   end
 
   local text = json_encode(result)
-  local limited = limit_text(text, model_limit())
-  if limited ~= text then
-    return limited
+  return limit_text_info(text, model_limit())
+end
+
+local function tool_result_summary(call, err, result)
+  if err then
+    return "error: " .. short_text(err, 220)
   end
-  return text
+
+  if type(result) ~= "table" then
+    return short_text(json_encode(result), 240)
+  end
+
+  local parts = {}
+  local function add(name, value)
+    if value == nil or value == "" then
+      return
+    end
+    table.insert(parts, ("%s=%s"):format(name, tostring(value)))
+  end
+
+  add("status", result.status)
+  add("action", result.action)
+  add("mode", result.mode)
+  add("cwd", result.cwd and vim.fn.fnamemodify(result.cwd, ":~") or nil)
+  add("root", result.root and vim.fn.fnamemodify(result.root, ":~") or nil)
+
+  local path = result.path or result.name
+  if path and path ~= "" then
+    add("path", vim.fn.fnamemodify(path, ":~"))
+  end
+
+  if type(result.current_buffer) == "table" then
+    local current = result.current_buffer.name
+    if current == nil or current == "" then
+      current = result.current_buffer.bufnr and ("#" .. result.current_buffer.bufnr) or nil
+    end
+    add("current_buffer", current and vim.fn.fnamemodify(current, ":~") or nil)
+  end
+
+  if result.start_line or result.end_line then
+    add("range", ("%s-%s"):format(result.start_line or "?", result.end_line or "?"))
+  end
+
+  add("line_count", result.line_count)
+  if type(result.windows) == "table" then
+    add("windows", #result.windows)
+  end
+  if type(result.items) == "table" then
+    add("items", #result.items)
+  end
+  if type(result.files) == "table" then
+    add("files", #result.files)
+  end
+  add("total", result.total)
+  if result.truncated then
+    add("truncated", true)
+  end
+  if result.query then
+    add("query", short_text(result.query, 80))
+  end
+  if result.message then
+    table.insert(parts, short_text(result.message, 180))
+  end
+
+  if vim.tbl_isempty(parts) then
+    return short_text(json_encode(result), 240)
+  end
+  return table.concat(parts, ", ")
 end
 
 local function native_tool_call_message(message)
@@ -580,14 +687,21 @@ end
 
 local function append_tool_result(call, err, result)
   local content = err or json_encode(result)
+  local display_content, display_truncated, display_chars = limit_text_info(content, display_limit())
+  local model_content, model_truncated, model_chars = compact_tool_result(call, err, result)
   table.insert(M.history, {
     role = "tool",
     tool = call.tool,
     native = call.native,
     tool_call_id = call.tool_call_id,
     error = err ~= nil,
-    content = limit_text(content, display_limit()),
-    model_content = compact_tool_result(call, err, result),
+    summary = tool_result_summary(call, err, result),
+    content = display_content,
+    content_chars = display_chars,
+    display_truncated = display_truncated,
+    model_content = model_content,
+    model_content_chars = model_chars,
+    model_truncated = model_truncated,
   })
 end
 
@@ -1030,6 +1144,15 @@ local function map_messages_keys()
 end
 
 local function ensure_buffers()
+  if not M.target_autocmd then
+    M.target_autocmd = true
+    vim.api.nvim_create_autocmd({ "WinEnter", "BufEnter" }, {
+      callback = function()
+        capture_target()
+      end,
+    })
+  end
+
   if not valid_buffer(M.messages_bufnr) then
     M.messages_bufnr = vim.api.nvim_create_buf(false, true)
     pcall(vim.api.nvim_buf_set_name, M.messages_bufnr, "ai://chat")
@@ -1051,6 +1174,7 @@ end
 function M.open(opts)
   opts = opts or {}
   local layout = opts.layout or "side"
+  capture_target()
   M.system_prompt = opts.system_prompt or M.system_prompt or function() return "You are an AI assistant embedded in Neovim." end
   ensure_buffers()
 
@@ -1058,6 +1182,7 @@ function M.open(opts)
     if M.layout ~= layout then
       M.close()
     else
+      capture_target()
       vim.api.nvim_set_current_win(M.input_winid)
       vim.cmd.startinsert()
       return
@@ -1069,16 +1194,24 @@ function M.open(opts)
   end
 
   if valid_window(M.messages_winid) and valid_window(M.input_winid) then
+    capture_target()
     vim.api.nvim_set_current_win(M.input_winid)
     vim.cmd.startinsert()
     return
   end
 
   local chat_opts = config.get().chat
-  if layout == "float" then
-    open_float(chat_opts)
-  else
-    open_side(chat_opts)
+  M.suspend_target_capture = true
+  local ok, err = pcall(function()
+    if layout == "float" then
+      open_float(chat_opts)
+    else
+      open_side(chat_opts)
+    end
+  end)
+  M.suspend_target_capture = false
+  if not ok then
+    error(err)
   end
 
   configure_chat_windows()
