@@ -120,7 +120,7 @@ Agent plan:
 Chat:
 
 ```vim
-:AIChat {message}
+:AIChat {message}            " open side chat; optional message sends immediately
 :AIChatReset
 ```
 
@@ -175,3 +175,8 @@ d mark active plan step done
 s skip active plan step
 q close AI window
 ```
+
+`:AIChat` opens a right-side chat panel. The top pane shows the conversation,
+and the bottom pane is the input area. Press `<CR>` or `<C-s>` in the input pane
+to send, `<C-l>` to clear the chat, and `q` to close the panel.
+The empty input pane shows configurable ghost text from `chat.placeholder`.

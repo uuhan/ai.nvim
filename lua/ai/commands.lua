@@ -1,13 +1,12 @@
 local agent = require("ai.agent")
+local chat_panel = require("ai.chat")
 local client = require("ai.client")
 local config = require("ai.config")
 local context = require("ai.context")
 local locations = require("ai.locations")
 local ui = require("ai.ui")
 
-local M = {
-  chat_history = {},
-}
+local M = {}
 
 local function system_prompt()
   local rules = context.rules(0)
@@ -554,54 +553,14 @@ end
 
 function M.chat(cmd)
   local prompt = cmd.args or ""
-
-  local function send(message)
-    if message == nil or message == "" then
-      return
-    end
-    table.insert(M.chat_history, { role = "user", content = message })
-    local req = {
-      { role = "system", content = system_prompt() },
-    }
-    vim.list_extend(req, M.chat_history)
-    local bufnr = ui.open_output("chat", "Requesting AI response...")
-    if config.get().provider.stream then
-      local text = ""
-      client.chat_stream(req, {}, {
-        on_delta = function(delta)
-          text = text .. delta
-          ui.set_output(bufnr, "chat", text)
-        end,
-        on_error = function(err)
-          ui.set_output(bufnr, "chat-error", err)
-        end,
-        on_done = function()
-          table.insert(M.chat_history, { role = "assistant", content = text })
-        end,
-      })
-      return
-    end
-
-    client.chat(req, {}, function(err, text)
-      if err then
-        ui.set_output(bufnr, "chat-error", err)
-        return
-      end
-      table.insert(M.chat_history, { role = "assistant", content = text })
-      ui.set_output(bufnr, "chat", text)
-    end)
-  end
-
+  chat_panel.open({ system_prompt = system_prompt })
   if prompt ~= "" then
-    send(prompt)
-    return
+    chat_panel.send(prompt)
   end
-
-  vim.ui.input({ prompt = "AI> " }, send)
 end
 
 function M.chat_reset()
-  M.chat_history = {}
+  chat_panel.clear()
   ui.notify("AI chat history cleared.")
 end
 

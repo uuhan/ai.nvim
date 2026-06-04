@@ -81,8 +81,16 @@ Agent plan:
   :AIPlanReset               Clear the active plan.
 
 Chat:
-  :AIChat {message}         Continue a simple chat session.
+  :AIChat {message}         Open side chat; optional message sends immediately.
   :AIChatReset              Clear chat history.
+
+The chat panel opens on the right. The top pane shows messages and the bottom
+pane is the input area. In the input pane:
+  <CR>                      Send message.
+  <C-s>                     Send message.
+  <C-l>                     Clear chat.
+  q                         Close chat panel.
+The empty input pane shows configurable ghost text from chat.placeholder.
 
 Config:
   :AIPing                  Send a tiny request to test provider/model health.

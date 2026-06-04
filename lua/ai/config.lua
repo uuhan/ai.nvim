@@ -47,6 +47,11 @@ local defaults = {
       close = "q",
     },
   },
+  chat = {
+    width = 80,
+    input_height = 3,
+    placeholder = "在此输入，Enter 发送",
+  },
   safety = {
     allow_dangerous_commands = false,
     blocked_command_patterns = {
