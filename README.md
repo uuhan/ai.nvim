@@ -21,23 +21,42 @@ project grep -> answer with source context
 With lazy.nvim:
 
 ```lua
-{
-  "uuhan/ai.nvim",
-  dependencies = {
-    {
-      "MeanderingProgrammer/render-markdown.nvim",
-      dependencies = { "nvim-treesitter/nvim-treesitter" },
-      opts = {
-        file_types = { "markdown" },
+local function ai_chat_toggle()
+  if vim.fn.mode():match "^[iR]" then
+    vim.cmd.stopinsert()
+  end
+  vim.cmd.AIChatToggle()
+end
+
+---@type LazySpec
+return {
+  {
+    "uuhan/ai.nvim",
+    lazy = false,
+    dependencies = {
+      {
+        "MeanderingProgrammer/render-markdown.nvim",
+        dependencies = { "nvim-treesitter/nvim-treesitter" },
+        opts = {
+          file_types = { "markdown" },
+        },
       },
     },
-  },
-  opts = {
-    provider = {
-      model = "gpt-5.4-mini",
-      api_key_env = "OPENAI_API_KEY",
-      base_url = "https://api.openai.com/v1",
-      stream = true,
+    keys = {
+      { "<C-/>", ai_chat_toggle, mode = { "n", "i" }, desc = "Toggle AI chat" },
+      { "<C-_>", ai_chat_toggle, mode = { "n", "i" }, desc = "Toggle AI chat" },
+    },
+    opts = {
+      provider = {
+        base_url = os.getenv "AI_NVIM_BASE_URL" or "https://api.deepseek.com",
+        api_key_env = os.getenv "AI_NVIM_API_KEY_ENV" or "DEEPSEEK_API_KEY",
+        model = os.getenv "AI_NVIM_MODEL" or "deepseek-v4-flash",
+        stream = os.getenv "AI_NVIM_STREAM" ~= "0",
+        temperature = tonumber(os.getenv "AI_NVIM_TEMPERATURE" or "") or 0.2,
+      },
+      chat = {
+        max_tool_rounds = tonumber(os.getenv "AI_NVIM_MAX_TOOL_ROUNDS" or "") or 20,
+      },
     },
   },
 }
