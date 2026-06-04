@@ -53,12 +53,12 @@ local function parse_chat_response(stdout)
   local message = choice and choice.message
   local content = message and message.content
   local text = text_from_content(content)
-  if text == "" then
+  if text == "" and not (message and message.tool_calls) then
     local finish_reason = choice and choice.finish_reason or "unknown"
     return nil, "Provider response did not include choices[1].message.content; finish_reason=" .. finish_reason
   end
 
-  return text, nil, decoded
+  return text, nil, decoded, message
 end
 
 local function provider_url(provider)
@@ -101,6 +101,14 @@ local function make_request(messages, opts, stream)
 
   if opts.max_tokens or provider.max_tokens then
     body.max_tokens = opts.max_tokens or provider.max_tokens
+  end
+
+  if opts.tools then
+    body.tools = opts.tools
+  end
+
+  if opts.tool_choice then
+    body.tool_choice = opts.tool_choice
   end
 
   local args = {
@@ -151,7 +159,7 @@ function M.chat(messages, opts, cb)
     return
   end
 
-  vim.system(args, { text = true, stdin = json_encode(body) }, function(obj)
+  local job = vim.system(args, { text = true, stdin = json_encode(body) }, function(obj)
     vim.schedule(function()
       if obj.code ~= 0 then
         local stderr = obj.stderr or ""
@@ -160,15 +168,16 @@ function M.chat(messages, opts, cb)
         return
       end
 
-      local text, err, raw = parse_chat_response(obj.stdout or "")
+      local text, err, raw, message = parse_chat_response(obj.stdout or "")
       if err then
         cb(err)
         return
       end
 
-      cb(nil, text, raw)
+      cb(nil, text, raw, message)
     end)
   end)
+  return job
 end
 
 local function parse_stream_line(line, callbacks)
@@ -274,6 +283,11 @@ function M.chat_stream(messages, opts, callbacks)
 
   vim.fn.chansend(job, json_encode(body))
   vim.fn.chanclose(job, "stdin")
+  return {
+    kill = function()
+      pcall(vim.fn.jobstop, job)
+    end,
+  }
 end
 
 return M

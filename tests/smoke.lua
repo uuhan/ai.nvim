@@ -5,6 +5,9 @@ ai.setup({
   provider = {
     api_key = "",
   },
+  chat = {
+    max_tool_model_chars = 80,
+  },
 })
 
 local commands = {
@@ -30,6 +33,7 @@ local commands = {
   "AIProject",
   "AIChat",
   "AIChatToggle",
+  "AIChatStop",
   "AIChatReset",
   "AIPing",
   "AITools",
@@ -158,22 +162,36 @@ local chat_calls = 0
 client.chat = function(messages, opts, cb)
   chat_calls = chat_calls + 1
   assert(opts.stream == false, "AIChat harness should use non-streaming requests")
+  assert(type(opts.tools) == "table" and #opts.tools > 0, "AIChat did not send native tool definitions")
+  assert(opts.tool_choice == "auto", "AIChat did not enable native tool choice")
   if chat_calls == 1 then
     assert(messages[1].content:match("Available tools"), "AIChat did not include tool registry")
-    cb(nil, "我先看看当前 buffer。\n\n" .. vim.json.encode({
-      tool = "nvim_current_buffer",
-    }))
+    cb(nil, "我先看看当前 buffer。", nil, {
+      content = "我先看看当前 buffer。",
+      tool_calls = {
+        {
+          id = "call_current_buffer",
+          type = "function",
+          ["function"] = {
+            name = "nvim_current_buffer",
+            arguments = "{}",
+          },
+        },
+      },
+    })
     return
   end
 
   local saw_tool_result = false
   for _, message in ipairs(messages) do
-    if message.content:match("Tool `nvim_current_buffer` returned") then
+    if message.role == "tool" and message.tool_call_id == "call_current_buffer" then
       saw_tool_result = true
+      assert(#message.content <= 120, "AIChat did not compress native tool result for model backfill")
+      assert(message.content:match("%[truncated%]"), "AIChat did not mark compressed native tool result")
       break
     end
   end
-  assert(saw_tool_result, "AIChat did not feed tool result back to model")
+  assert(saw_tool_result, "AIChat did not feed native tool result back to model")
 
   if chat_calls == 2 then
     cb(nil, "现在读取前几行。\n\n" .. vim.json.encode({
@@ -189,7 +207,7 @@ client.chat = function(messages, opts, cb)
 
   local saw_buffer_result = false
   for _, message in ipairs(messages) do
-    if message.content:match("Tool `nvim_read_buffer` returned") then
+    if message.role == "user" and message.content:match("Tool `nvim_read_buffer` returned") then
       saw_buffer_result = true
       break
     end
@@ -212,6 +230,8 @@ client.chat = original_chat
 assert(chat_calls == 3, "AIChat did not complete the tool loop")
 assert(chat.history[#chat.history].content:match("local x = 1"), "AIChat did not store final assistant reply")
 local rendered_chat = table.concat(vim.api.nvim_buf_get_lines(chat.messages_bufnr, 0, -1, false), "\n")
+assert(rendered_chat:match("Status: `idle`"), "AIChat did not render idle status")
+assert(rendered_chat:match("我先看看当前 buffer。"), "AIChat did not split assistant text before native tool call")
 assert(rendered_chat:match("> %[!NOTE%] Tool call: nvim_current_buffer"), "AIChat did not render embedded tool call markdown")
 assert(rendered_chat:match("> %[!NOTE%] Tool call: nvim_read_buffer"), "AIChat did not render tool call markdown")
 assert(rendered_chat:match("> %[!INFO%] Tool result: nvim_read_buffer %(returned%)"), "AIChat did not render tool result markdown")
@@ -232,6 +252,24 @@ assert(folded_line, "AIChat did not include foldable tool result JSON")
 vim.api.nvim_win_call(chat.messages_winid, function()
   assert(vim.fn.foldclosed(folded_line) > 0, "AIChat did not fold tool result details")
 end)
+
+local stopped_request = false
+client.chat = function(_, opts)
+  assert(opts.stream == false, "AIChat stop test should use non-streaming request")
+  return {
+    kill = function()
+      stopped_request = true
+    end,
+  }
+end
+chat.send("wait for stop")
+assert(chat.active, "AIChat stop test did not start an active request")
+vim.cmd("AIChatStop")
+client.chat = original_chat
+assert(stopped_request, "AIChatStop did not kill the active request")
+assert(not chat.active, "AIChatStop did not mark chat inactive")
+assert(chat.status == "stopped", "AIChatStop did not render stopped status")
+
 vim.cmd("AIChatToggle")
 assert(not chat.is_open(), "AIChat toggle did not close chat panes")
 vim.cmd("AIChatToggle")

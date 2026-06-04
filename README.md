@@ -131,6 +131,7 @@ Chat:
 ```vim
 :AIChat {message}            " open side chat; optional message sends immediately
 :AIChatToggle                " open or hide side chat
+:AIChatStop                  " stop the active chat request
 :AIChatReset
 ```
 
@@ -174,9 +175,10 @@ codex.md
   git diff, project files/search, and patch/command preview.
 - Command execution has a small safety blocklist by default. Set
   `safety.allow_dangerous_commands = true` only if you want `:AIRun` to skip it.
-- Set `provider.stream = true` to stream normal answers and chat responses.
-  Patch, command, and AIChat tool-loop requests stay non-streaming so the plugin
-  can parse the complete result before previewing it or dispatching tools.
+- Set `provider.stream = true` to stream normal answers and AIChat requests
+  when `chat.tools_enabled = false`. Patch, command, and AIChat tool-loop
+  requests stay non-streaming so the plugin can parse the complete result before
+  previewing it or dispatching tools.
 - `:AIAgent` generates a plan only. It does not apply patches or run commands.
   Use `:AIPlanApply` with `:AIApply`, or `:AIPlanRun` with `:AIRun`, then
   `:AIPlanDone` to advance the plan.
@@ -198,13 +200,20 @@ q close AI window
 
 `:AIChat` opens a right-side chat panel. The top pane shows the conversation,
 and the bottom pane is the input area. Press `<CR>` or `<C-s>` in the input pane
-to send, `<C-l>` to clear the chat, and `<C-q>` or `q` to close the panel.
-The empty input pane shows configurable ghost text from `chat.placeholder`.
-By default, AIChat can call the harness tools listed by `:AITools`. Tool calls
-and tool results are rendered as Markdown callouts in the conversation. Patch
-and command tools only create previews; use `:AIApply` or `:AIRun` after
-inspection. Tool result details are folded by default; use normal Neovim fold
-keys such as `zo`, `zc`, and `za` to inspect or hide them.
+to send, `<C-c>` or `:AIChatStop` to stop the active request, `<C-l>` to clear
+the chat, and `<C-q>` or `q` to close the panel. The conversation pane shows a
+small status line such as `thinking`, `running tool`, or `idle`. The empty input
+pane shows configurable ghost text from `chat.placeholder`.
+
+By default, AIChat can call the harness tools listed by `:AITools`. Providers
+that support OpenAI-compatible `tools` receive native tool definitions; models
+that emit text JSON tool calls still work as a fallback. Tool calls and tool
+results are rendered as Markdown callouts in the conversation. Patch and command
+tools only create previews; use `:AIApply` or `:AIRun` after inspection. Tool
+result details are folded by default; use normal Neovim fold keys such as `zo`,
+`zc`, and `za` to inspect or hide them. Full tool output stays visible in the
+chat up to `chat.max_tool_result_chars`; the content sent back to the model is
+compressed separately by `chat.max_tool_model_chars`.
 
 Chat tool loop settings:
 
@@ -212,8 +221,10 @@ Chat tool loop settings:
 require("ai").setup({
   chat = {
     render_markdown = true,
+    native_tools = true,
     tools_enabled = true,
     max_tool_rounds = 20,
+    max_tool_model_chars = 6000,
     max_tool_result_chars = 20000,
     fold_tool_results = true,
   },

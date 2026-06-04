@@ -564,6 +564,10 @@ function M.chat_toggle()
   chat_panel.toggle({ system_prompt = system_prompt })
 end
 
+function M.chat_stop()
+  chat_panel.stop()
+end
+
 function M.chat_reset()
   chat_panel.clear()
   ui.notify("AI chat history cleared.")
@@ -722,6 +726,7 @@ function M.setup()
   create_command("AIPlanReset", M.plan_reset, { nargs = 0, range = false })
   create_command("AIChat", M.chat, { range = false })
   create_command("AIChatToggle", M.chat_toggle, { nargs = 0, range = false })
+  create_command("AIChatStop", M.chat_stop, { nargs = 0, range = false })
   create_command("AIChatReset", M.chat_reset, { nargs = 0, range = false })
   create_command("AIPing", M.ping, { nargs = 0, range = false })
   create_command("AIApply", ui.apply_pending, { nargs = 0, range = false })

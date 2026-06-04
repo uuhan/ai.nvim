@@ -9,6 +9,10 @@ local M = {
   messages_winid = nil,
   input_winid = nil,
   active = false,
+  active_request = nil,
+  request_id = 0,
+  status = "idle",
+  status_detail = "",
   system_prompt = nil,
 }
 M.placeholder_ns = vim.api.nvim_create_namespace "ai.nvim.chat.placeholder"
@@ -21,6 +25,8 @@ end
 local function valid_window(winid)
   return winid and vim.api.nvim_win_is_valid(winid)
 end
+
+local render_history
 
 local function split_lines(text)
   local lines = vim.split((text or ""):gsub("\r\n", "\n"), "\n", { plain = true })
@@ -85,7 +91,11 @@ local function json_objects(text)
     elseif char == "}" and depth > 0 then
       depth = depth - 1
       if depth == 0 and start_index then
-        table.insert(objects, text:sub(start_index, index))
+        table.insert(objects, {
+          text = text:sub(start_index, index),
+          start_index = start_index,
+          end_index = index,
+        })
         start_index = nil
       end
     end
@@ -101,6 +111,14 @@ local function limit_text(text, max_chars)
     return text:sub(1, max_chars) .. "\n[truncated]"
   end
   return text
+end
+
+local function display_limit()
+  return config.get().chat.max_tool_result_chars
+end
+
+local function model_limit()
+  return config.get().chat.max_tool_model_chars or 6000
 end
 
 local function set_scratch(bufnr, filetype, modifiable)
@@ -206,6 +224,14 @@ local function set_messages(text)
   scroll_messages()
 end
 
+local function set_status(status, detail, extra)
+  M.status = status or "idle"
+  M.status_detail = detail or ""
+  if valid_buffer(M.messages_bufnr) then
+    set_messages(render_history(extra))
+  end
+end
+
 local function raw_input_text()
   if not valid_buffer(M.input_bufnr) then
     return ""
@@ -233,9 +259,11 @@ local function update_placeholder()
   end
 end
 
-local function render_history(extra)
+render_history = function(extra)
   local lines = {
     "# AI Chat",
+    "",
+    ("Status: `%s`%s"):format(M.status or "idle", M.status_detail ~= "" and (" - " .. M.status_detail) or ""),
     "",
   }
 
@@ -311,20 +339,36 @@ local function harness_prompt()
     return ""
   end
 
-  return table.concat({
+  local lines = {
     "AIChat has access to Neovim harness tools.",
     "Use tools when editor, project, git, diagnostics, quickfix, or preview context is needed.",
-    "To call a tool, reply with exactly one JSON object and no markdown:",
-    [[{"tool":"nvim_read_buffer","args":{"start_line":1,"end_line":80}}]],
     "After receiving a tool result, either call another tool or answer the user normally.",
     "Stop calling tools once you have enough context to answer the user's request.",
     "Call at most one tool per assistant message.",
     "Do not claim that a preview tool applied a patch or ran a command.",
     "Preview tools only prepare pending user-reviewed actions; the user must run :AIApply or :AIRun.",
+  }
+
+  if config.get().chat.native_tools ~= false then
+    vim.list_extend(lines, {
+      "Prefer the provider's native tool/function call format.",
+      "If native tool calls are unavailable, call one tool by replying with exactly one JSON object and no markdown:",
+      [[{"tool":"nvim_read_buffer","args":{"start_line":1,"end_line":80}}]],
+    })
+  else
+    vim.list_extend(lines, {
+      "To call a tool, reply with exactly one JSON object and no markdown:",
+      [[{"tool":"nvim_read_buffer","args":{"start_line":1,"end_line":80}}]],
+    })
+  end
+
+  vim.list_extend(lines, {
     "",
     "Available tools:",
     tools.describe(),
-  }, "\n")
+  })
+
+  return table.concat(lines, "\n")
 end
 
 local function tool_result_message(message)
@@ -332,8 +376,38 @@ local function tool_result_message(message)
   return table.concat({
     ("Tool `%s` %s."):format(message.tool or "unknown", state),
     "",
-    message.content or "",
+    message.model_content or message.content or "",
   }, "\n")
+end
+
+local function compact_tool_result(call, err, result)
+  if err then
+    return limit_text(err, model_limit())
+  end
+
+  local text = json_encode(result)
+  local limited = limit_text(text, model_limit())
+  if limited ~= text then
+    return limited
+  end
+  return text
+end
+
+local function native_tool_call_message(message)
+  return {
+    role = "assistant",
+    content = message.content or "",
+    tool_calls = {
+      {
+        id = message.tool_call_id,
+        type = "function",
+        ["function"] = {
+          name = message.tool,
+          arguments = json_encode(message.args or {}),
+        },
+      },
+    },
+  }
 end
 
 local function request_messages()
@@ -349,9 +423,23 @@ local function request_messages()
 
   for _, message in ipairs(M.history) do
     if message.role == "user" or message.role == "assistant" then
-      table.insert(messages, { role = message.role, content = message.content })
+      if message.kind == "tool_call" and message.native then
+        table.insert(messages, native_tool_call_message(message))
+      elseif message.kind == "tool_call" then
+        table.insert(messages, { role = "assistant", content = message.content })
+      else
+        table.insert(messages, { role = message.role, content = message.content })
+      end
     elseif message.role == "tool" then
-      table.insert(messages, { role = "user", content = tool_result_message(message) })
+      if message.native and message.tool_call_id then
+        table.insert(messages, {
+          role = "tool",
+          tool_call_id = message.tool_call_id,
+          content = message.model_content or message.content or "",
+        })
+      else
+        table.insert(messages, { role = "user", content = tool_result_message(message) })
+      end
     end
   end
 
@@ -389,8 +477,10 @@ local function parse_tool_call(text)
   end
 
   for _, object in ipairs(json_objects(body)) do
-    call = normalize(json_decode(object))
+    call = normalize(json_decode(object.text))
     if call then
+      local preface = (body:sub(1, object.start_index - 1) .. body:sub(object.end_index + 1)):gsub("^%s+", ""):gsub("%s+$", "")
+      call.preface = preface ~= "" and preface or nil
       return call
     end
   end
@@ -398,13 +488,50 @@ local function parse_tool_call(text)
   return nil
 end
 
+local function parse_native_tool_calls(message)
+  local calls = {}
+  if type(message) ~= "table" or type(message.tool_calls) ~= "table" then
+    return calls
+  end
+
+  for index, item in ipairs(message.tool_calls) do
+    local fn = item["function"] or {}
+    local name = fn.name
+    if type(name) == "string" and name ~= "" then
+      local args = {}
+      if type(fn.arguments) == "string" and fn.arguments ~= "" then
+        local decoded = json_decode(fn.arguments)
+        if type(decoded) == "table" then
+          args = decoded
+        else
+          args = {}
+        end
+      elseif type(fn.arguments) == "table" then
+        args = fn.arguments
+      end
+
+      table.insert(calls, {
+        tool = name,
+        args = args,
+        native = true,
+        tool_call_id = item.id or ("ai_nvim_tool_" .. index),
+      })
+    end
+  end
+
+  return calls
+end
+
 local function append_tool_result(call, err, result)
   local content = err or json_encode(result)
   table.insert(M.history, {
     role = "tool",
     tool = call.tool,
+    native = call.native,
+    tool_call_id = call.tool_call_id,
     error = err ~= nil,
-    content = limit_text(content, config.get().chat.max_tool_result_chars),
+    content = limit_text(content, display_limit()),
+    model_content = compact_tool_result(call, err, result),
   })
 end
 
@@ -469,7 +596,26 @@ end
 
 function M.clear()
   M.history = {}
+  M.status = "idle"
+  M.status_detail = ""
   set_messages(render_history())
+end
+
+function M.stop()
+  if not M.active then
+    set_status("idle")
+    return
+  end
+
+  M.request_id = M.request_id + 1
+  if M.active_request and type(M.active_request.kill) == "function" then
+    pcall(function()
+      M.active_request:kill(15)
+    end)
+  end
+  M.active_request = nil
+  M.active = false
+  set_status("stopped", "request cancelled")
 end
 
 function M.send(text)
@@ -478,56 +624,129 @@ function M.send(text)
     return
   end
 
+  M.request_id = M.request_id + 1
+  local request_id = M.request_id
   M.active = true
+  M.active_request = nil
   table.insert(M.history, { role = "user", content = text })
   reset_input()
-  set_messages(render_history("## Assistant\n\n..."))
+  set_status("thinking", "waiting for model", "## Assistant\n\n...")
 
   if config.get().chat.tools_enabled ~= false then
     local max_rounds = tonumber(config.get().chat.max_tool_rounds) or 20
 
+    local function stale()
+      return request_id ~= M.request_id
+    end
+
+    local function finish(status, detail, extra)
+      if stale() then
+        return
+      end
+      M.active_request = nil
+      M.active = false
+      set_status(status or "idle", detail, extra)
+    end
+
+    local function append_assistant_text(content)
+      content = (content or ""):gsub("^%s+", ""):gsub("%s+$", "")
+      if content ~= "" then
+        table.insert(M.history, { role = "assistant", content = content })
+      end
+    end
+
+    local function tool_call_content(call)
+      return json_encode({
+        tool = call.tool,
+        args = call.args or {},
+      })
+    end
+
+    local function execute_calls(calls, index, next_tool_round, done)
+      if stale() then
+        return
+      end
+
+      local call = calls[index]
+      if not call then
+        done(next_tool_round)
+        return
+      end
+
+      table.insert(M.history, {
+        role = "assistant",
+        kind = "tool_call",
+        tool = call.tool,
+        args = call.args,
+        content = call.native and "" or tool_call_content(call),
+        native = call.native,
+        tool_call_id = call.tool_call_id,
+      })
+      set_status("running tool", call.tool, tool_running_card(call.tool))
+
+      if call.error then
+        append_tool_result(call, call.error)
+        execute_calls(calls, index + 1, next_tool_round + 1, done)
+        return
+      end
+
+      tools.run(call.tool, call.args, function(tool_err, result)
+        if stale() then
+          return
+        end
+        append_tool_result(call, tool_err, result)
+        set_status("thinking", "tool result ready")
+        execute_calls(calls, index + 1, next_tool_round + 1, done)
+      end)
+    end
+
     local function request_next(tool_rounds)
-      client.chat(request_messages(), { stream = false }, function(err, response)
+      if stale() then
+        return
+      end
+
+      local opts = { stream = false }
+      if config.get().chat.native_tools ~= false then
+        opts.tools = tools.openai_tools()
+        opts.tool_choice = "auto"
+      end
+
+      set_status("thinking", "waiting for model", "## Assistant\n\n...")
+      M.active_request = client.chat(request_messages(), opts, function(err, response, _, message)
+        if stale() then
+          return
+        end
+
+        M.active_request = nil
         if err then
-          M.active = false
-          set_messages(render_history("## Error\n\n" .. err))
+          finish("error", "model request failed", "## Error\n\n" .. err)
           return
         end
 
-        local call = parse_tool_call(response)
-        if not call then
-          M.active = false
-          table.insert(M.history, { role = "assistant", content = response })
-          set_messages(render_history())
+        local calls = parse_native_tool_calls(message)
+        if #calls > 0 then
+          append_assistant_text(response)
+        else
+          local text_call = parse_tool_call(response)
+          if text_call then
+            append_assistant_text(text_call.preface)
+            calls = { text_call }
+          end
+        end
+
+        if #calls == 0 then
+          append_assistant_text(response)
+          finish("idle")
           return
         end
 
-        if tool_rounds >= max_rounds then
-          M.active = false
-          set_messages(render_history("## Error\n\nAIChat stopped after reaching the tool round limit."))
+        if tool_rounds + #calls > max_rounds then
+          finish("error", "tool round limit reached", "## Error\n\nAIChat stopped after reaching the tool round limit.")
           return
         end
 
-        table.insert(M.history, {
-          role = "assistant",
-          kind = "tool_call",
-          tool = call.tool,
-          args = call.args,
-          content = response,
-        })
-        set_messages(render_history(tool_running_card(call.tool)))
-
-        if call.error then
-          append_tool_result(call, call.error)
-          set_messages(render_history("## Assistant\n\n..."))
-          request_next(tool_rounds + 1)
-          return
-        end
-
-        tools.run(call.tool, call.args, function(tool_err, result)
-          append_tool_result(call, tool_err, result)
-          set_messages(render_history("## Assistant\n\n..."))
-          request_next(tool_rounds + 1)
+        execute_calls(calls, 1, tool_rounds, function(next_tool_round)
+          request_next(next_tool_round)
         end)
       end)
     end
@@ -538,32 +757,47 @@ function M.send(text)
 
   if config.get().provider.stream then
     local assistant = ""
-    client.chat_stream(request_messages(), {}, {
+    M.active_request = client.chat_stream(request_messages(), {}, {
       on_delta = function(delta)
+        if request_id ~= M.request_id then
+          return
+        end
         assistant = assistant .. delta
-        set_messages(render_history("## Assistant\n\n" .. assistant))
+        set_status("streaming", "receiving response", "## Assistant\n\n" .. assistant)
       end,
       on_error = function(err)
+        if request_id ~= M.request_id then
+          return
+        end
+        M.active_request = nil
         M.active = false
-        set_messages(render_history("## Error\n\n" .. err))
+        set_status("error", "stream failed", "## Error\n\n" .. err)
       end,
       on_done = function()
+        if request_id ~= M.request_id then
+          return
+        end
+        M.active_request = nil
         M.active = false
         table.insert(M.history, { role = "assistant", content = assistant })
-        set_messages(render_history())
+        set_status("idle")
       end,
     })
     return
   end
 
-  client.chat(request_messages(), {}, function(err, response)
+  M.active_request = client.chat(request_messages(), {}, function(err, response)
+    if request_id ~= M.request_id then
+      return
+    end
+    M.active_request = nil
     M.active = false
     if err then
-      set_messages(render_history("## Error\n\n" .. err))
+      set_status("error", "model request failed", "## Error\n\n" .. err)
       return
     end
     table.insert(M.history, { role = "assistant", content = response })
-    set_messages(render_history())
+    set_status("idle")
   end)
 end
 
@@ -572,6 +806,10 @@ local function map_input_keys()
   local close = function()
     vim.cmd.stopinsert()
     M.close()
+  end
+  local stop = function()
+    vim.cmd.stopinsert()
+    M.stop()
   end
   vim.keymap.set("n", "<CR>", function() M.send() end, vim.tbl_extend("force", opts, { desc = "AI chat send" }))
   vim.keymap.set("i", "<CR>", function()
@@ -583,6 +821,7 @@ local function map_input_keys()
     M.send()
   end, vim.tbl_extend("force", opts, { desc = "AI chat send" }))
   vim.keymap.set("n", "<C-l>", M.clear, vim.tbl_extend("force", opts, { desc = "AI chat clear" }))
+  vim.keymap.set({ "n", "i" }, "<C-c>", stop, vim.tbl_extend("force", opts, { desc = "AI chat stop" }))
   vim.keymap.set("n", "q", M.close, vim.tbl_extend("force", opts, { desc = "AI chat close" }))
   vim.keymap.set({ "n", "i" }, "<C-q>", close, vim.tbl_extend("force", opts, { desc = "AI chat close" }))
 end
@@ -602,6 +841,7 @@ local function map_messages_keys()
     end
   end, vim.tbl_extend("force", opts, { desc = "AI chat focus input" }))
   vim.keymap.set("n", "<C-l>", M.clear, vim.tbl_extend("force", opts, { desc = "AI chat clear" }))
+  vim.keymap.set("n", "<C-c>", M.stop, vim.tbl_extend("force", opts, { desc = "AI chat stop" }))
   vim.keymap.set("n", "q", M.close, vim.tbl_extend("force", opts, { desc = "AI chat close" }))
   vim.keymap.set({ "n", "i" }, "<C-q>", M.close, vim.tbl_extend("force", opts, { desc = "AI chat close" }))
 end
