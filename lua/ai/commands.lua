@@ -4,6 +4,7 @@ local client = require("ai.client")
 local config = require("ai.config")
 local context = require("ai.context")
 local locations = require("ai.locations")
+local tools = require("ai.tools")
 local ui = require("ai.ui")
 
 local M = {}
@@ -559,6 +560,10 @@ function M.chat(cmd)
   end
 end
 
+function M.chat_toggle()
+  chat_panel.toggle({ system_prompt = system_prompt })
+end
+
 function M.chat_reset()
   chat_panel.clear()
   ui.notify("AI chat history cleared.")
@@ -627,6 +632,64 @@ function M.show_config()
   ui.open_output("config", vim.inspect(opts), "lua")
 end
 
+function M.tools()
+  ui.open_output("tools", tools.render(), "markdown")
+end
+
+local function parse_tool_call(raw)
+  raw = (raw or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  if raw == "" then
+    return nil, nil, "Usage: :AITool {tool_name} [json_args]"
+  end
+
+  local name, payload = raw:match("^(%S+)%s*(.*)$")
+  if not name then
+    return nil, nil, "Usage: :AITool {tool_name} [json_args]"
+  end
+
+  if payload == "" then
+    return name, {}
+  end
+
+  local ok, decoded = pcall(vim.json.decode, payload)
+  if not ok or type(decoded) ~= "table" then
+    return nil, nil, "Tool args must be a JSON object."
+  end
+
+  return name, decoded
+end
+
+function M.tool(cmd)
+  local name, args, parse_err = parse_tool_call(cmd.args)
+  if parse_err then
+    ui.open_output("tool-error", parse_err)
+    return
+  end
+
+  local bufnr = ui.open_output("tool-" .. name, "Running tool...")
+  tools.run(name, args, function(err, result)
+    if err then
+      ui.set_output(bufnr, "tool-error", err)
+      return
+    end
+    ui.set_output(bufnr, "tool-" .. name, tools.result_text(result), "lua")
+  end)
+end
+
+local function complete_tool_names(arg_lead, cmdline)
+  if cmdline:match("^%s*AITool%s+%S+%s") then
+    return {}
+  end
+
+  local out = {}
+  for _, name in ipairs(tools.names()) do
+    if name:sub(1, #arg_lead) == arg_lead then
+      table.insert(out, name)
+    end
+  end
+  return out
+end
+
 function M.setup()
   create_command("AI", M.ai)
   create_command("AIExplain", M.explain)
@@ -658,11 +721,14 @@ function M.setup()
   create_command("AIPlanShow", M.plan_show, { nargs = 0, range = false })
   create_command("AIPlanReset", M.plan_reset, { nargs = 0, range = false })
   create_command("AIChat", M.chat, { range = false })
+  create_command("AIChatToggle", M.chat_toggle, { nargs = 0, range = false })
   create_command("AIChatReset", M.chat_reset, { nargs = 0, range = false })
   create_command("AIPing", M.ping, { nargs = 0, range = false })
   create_command("AIApply", ui.apply_pending, { nargs = 0, range = false })
   create_command("AIRun", ui.run_pending_command, { nargs = 0, range = false })
   create_command("AIReject", ui.reject_pending, { nargs = 0, range = false })
+  create_command("AITools", M.tools, { nargs = 0, range = false })
+  create_command("AITool", M.tool, { nargs = "*", range = false, complete = complete_tool_names })
   create_command("AIRules", M.show_rules, { nargs = 0, range = false })
   create_command("AIConfig", M.show_config, { nargs = 0, range = false })
 end

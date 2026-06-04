@@ -51,6 +51,11 @@ local defaults = {
     width = 80,
     input_height = 3,
     placeholder = "在此输入，Enter 发送",
+    render_markdown = true,
+    tools_enabled = true,
+    max_tool_rounds = 20,
+    max_tool_result_chars = 20000,
+    fold_tool_results = true,
   },
   safety = {
     allow_dangerous_commands = false,

@@ -23,6 +23,15 @@ With lazy.nvim:
 ```lua
 {
   "uuhan/ai.nvim",
+  dependencies = {
+    {
+      "MeanderingProgrammer/render-markdown.nvim",
+      dependencies = { "nvim-treesitter/nvim-treesitter" },
+      opts = {
+        file_types = { "markdown" },
+      },
+    },
+  },
   opts = {
     provider = {
       model = "gpt-5.4-mini",
@@ -121,7 +130,15 @@ Chat:
 
 ```vim
 :AIChat {message}            " open side chat; optional message sends immediately
+:AIChatToggle                " open or hide side chat
 :AIChatReset
+```
+
+Harness tools:
+
+```vim
+:AITools                     " show model-facing Neovim tool registry
+:AITool {name} [json_args]   " run one tool manually
 ```
 
 Configuration and rules:
@@ -152,11 +169,14 @@ codex.md
   `git status --short`.
 - `:AIReviewDiff` and `:AIFindBugInDiff` parse `file:line` references from the
   AI response and place them in the location list when possible.
+- `:AITools` exposes bounded Neovim context tools for the coding harness:
+  editor state, buffers, files, selection, diagnostics, quickfix/location lists,
+  git diff, project files/search, and patch/command preview.
 - Command execution has a small safety blocklist by default. Set
   `safety.allow_dangerous_commands = true` only if you want `:AIRun` to skip it.
 - Set `provider.stream = true` to stream normal answers and chat responses.
-  Patch and command requests stay non-streaming so the plugin can parse the
-  complete result before previewing it.
+  Patch, command, and AIChat tool-loop requests stay non-streaming so the plugin
+  can parse the complete result before previewing it or dispatching tools.
 - `:AIAgent` generates a plan only. It does not apply patches or run commands.
   Use `:AIPlanApply` with `:AIApply`, or `:AIPlanRun` with `:AIRun`, then
   `:AIPlanDone` to advance the plan.
@@ -178,5 +198,38 @@ q close AI window
 
 `:AIChat` opens a right-side chat panel. The top pane shows the conversation,
 and the bottom pane is the input area. Press `<CR>` or `<C-s>` in the input pane
-to send, `<C-l>` to clear the chat, and `q` to close the panel.
+to send, `<C-l>` to clear the chat, and `<C-q>` or `q` to close the panel.
 The empty input pane shows configurable ghost text from `chat.placeholder`.
+By default, AIChat can call the harness tools listed by `:AITools`. Tool calls
+and tool results are rendered as Markdown callouts in the conversation. Patch
+and command tools only create previews; use `:AIApply` or `:AIRun` after
+inspection. Tool result details are folded by default; use normal Neovim fold
+keys such as `zo`, `zc`, and `za` to inspect or hide them.
+
+Chat tool loop settings:
+
+```lua
+require("ai").setup({
+  chat = {
+    render_markdown = true,
+    tools_enabled = true,
+    max_tool_rounds = 20,
+    max_tool_result_chars = 20000,
+    fold_tool_results = true,
+  },
+})
+```
+
+AIChat uses `render-markdown.nvim` for Markdown rendering. Install the
+`markdown` and `markdown_inline` Treesitter parsers for Markdown structure, and
+the relevant language parser, for example `typescript`, for fenced code block
+token highlighting.
+
+The same tool registry is available from Lua:
+
+```lua
+local tools = require("ai").tools()
+tools.run("nvim_current_buffer", {}, function(err, result)
+  print(vim.inspect(result))
+end)
+```

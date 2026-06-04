@@ -5,6 +5,7 @@ CONTENTS                                                          *ai-contents*
 
 Setup                 |ai-setup|
 Commands              |ai-commands|
+Harness tools         |ai-tools|
 Project rules         |ai-rules|
 
 ==============================================================================
@@ -34,6 +35,24 @@ For local providers:
     },
   })
 <
+
+AIChat uses render-markdown.nvim for Markdown rendering. With lazy.nvim:
+>
+  {
+    "uuhan/ai.nvim",
+    dependencies = {
+      {
+        "MeanderingProgrammer/render-markdown.nvim",
+        dependencies = { "nvim-treesitter/nvim-treesitter" },
+        opts = { file_types = { "markdown" } },
+      },
+    },
+  }
+<
+
+Install the markdown and markdown_inline Treesitter parsers for Markdown
+structure. Install language parsers, such as typescript, for fenced code block
+token highlighting.
 
 ==============================================================================
 COMMANDS                                                          *ai-commands*
@@ -82,6 +101,7 @@ Agent plan:
 
 Chat:
   :AIChat {message}         Open side chat; optional message sends immediately.
+  :AIChatToggle             Open or hide side chat.
   :AIChatReset              Clear chat history.
 
 The chat panel opens on the right. The top pane shows messages and the bottom
@@ -89,8 +109,17 @@ pane is the input area. In the input pane:
   <CR>                      Send message.
   <C-s>                     Send message.
   <C-l>                     Clear chat.
-  q                         Close chat panel.
+  <C-q>                     Close both chat panes.
+  q                         Close both chat panes.
 The empty input pane shows configurable ghost text from chat.placeholder.
+AIChat can call harness tools by default. Tool calls and tool results are shown
+as Markdown callouts in the conversation. Patch and command tools only create
+previews; use :AIApply or :AIRun after inspection. Tool result details are
+folded by default; use normal fold keys such as zo, zc, and za.
+
+Harness tools:
+  :AITools                  Show the model-facing Neovim tool registry.
+  :AITool {name} [json]     Run one tool manually with optional JSON args.
 
 Config:
   :AIPing                  Send a tiny request to test provider/model health.
@@ -106,6 +135,38 @@ AI output buffers are reused by default. Local normal-mode keys:
   d                         Mark active plan step done.
   s                         Skip active plan step.
   q                         Close AI window.
+
+==============================================================================
+HARNESS TOOLS                                                        *ai-tools*
+
+ai.nvim exposes a small tool registry for the coding harness. Tools are
+available from Lua:
+>
+  local tools = require("ai").tools()
+  tools.run("nvim_current_buffer", {}, function(err, result)
+    print(vim.inspect(result))
+  end)
+<
+
+Current tools include editor state, buffer/file reads, current selection,
+diagnostics, quickfix and location lists, git diff, project file listing,
+project search, patch preview, and command preview.
+
+Preview tools prepare a pending action only. Patch tools still require
+:AIApply, and command tools still require :AIRun.
+
+AIChat uses this registry automatically when chat.tools_enabled is true:
+>
+  require("ai").setup({
+    chat = {
+      render_markdown = true,
+      tools_enabled = true,
+      max_tool_rounds = 20,
+      max_tool_result_chars = 20000,
+      fold_tool_results = true,
+    },
+  })
+<
 
 ==============================================================================
 PROJECT RULES                                                        *ai-rules*

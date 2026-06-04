@@ -12,4 +12,8 @@ function M.config()
   return config.get()
 end
 
+function M.tools()
+  return require("ai.tools")
+end
+
 return M
