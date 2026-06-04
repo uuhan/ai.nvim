@@ -104,6 +104,19 @@ Shell commands:
 :AIRun                       " run the latest generated command
 ```
 
+Agent plan:
+
+```vim
+:AIAgent {task}              " create a reviewable plan
+:AIPlanNext                  " preview the next pending step
+:AIPlanApply                 " preview the next patch step
+:AIPlanRun                   " preview the next command/test step
+:AIPlanDone                  " mark the active step done
+:AIPlanSkip                  " skip the active step
+:AIPlanShow                  " show the active plan
+:AIPlanReset                 " clear the active plan
+```
+
 Chat:
 
 ```vim
@@ -143,3 +156,6 @@ codex.md
 - Set `provider.stream = true` to stream normal answers and chat responses.
   Patch and command requests stay non-streaming so the plugin can parse the
   complete result before previewing it.
+- `:AIAgent` generates a plan only. It does not apply patches or run commands.
+  Use `:AIPlanApply` with `:AIApply`, or `:AIPlanRun` with `:AIRun`, then
+  `:AIPlanDone` to advance the plan.

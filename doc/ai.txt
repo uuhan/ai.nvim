@@ -70,6 +70,16 @@ Shell commands:
   :AIGit {task}              Generate a git command for review.
   :AIRun                     Run the latest generated command.
 
+Agent plan:
+  :AIAgent {task}            Generate a reviewable plan.
+  :AIPlanNext                Preview the next pending step.
+  :AIPlanApply               Preview the next patch step.
+  :AIPlanRun                 Preview the next command or test step.
+  :AIPlanDone                Mark the active step done.
+  :AIPlanSkip                Skip the active step.
+  :AIPlanShow                Show the active plan.
+  :AIPlanReset               Clear the active plan.
+
 Chat:
   :AIChat {message}         Continue a simple chat session.
   :AIChatReset              Clear chat history.

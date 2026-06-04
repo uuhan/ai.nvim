@@ -17,6 +17,14 @@ local commands = {
   "AICmd",
   "AIShell",
   "AIGit",
+  "AIAgent",
+  "AIPlanNext",
+  "AIPlanApply",
+  "AIPlanRun",
+  "AIPlanDone",
+  "AIPlanSkip",
+  "AIPlanShow",
+  "AIPlanReset",
   "AIFixAllDiagnostics",
   "AIReviewDiff",
   "AIProject",
@@ -122,5 +130,44 @@ assert(vim.wait(1000, function()
   return blocked_done
 end), "timed out waiting for command safety check")
 assert(blocked_err and blocked_err:match("Refusing to run"), "dangerous command was not blocked")
+
+local agent = require("ai.agent")
+local plan = assert(agent.parse([[
+```json
+{
+  "task": "fix a bug",
+  "summary": "Use a small patch and then run tests.",
+  "steps": [
+    {
+      "type": "inspect",
+      "title": "Read context",
+      "details": "Check the failing area."
+    },
+    {
+      "type": "patch",
+      "title": "Patch file",
+      "patch": "diff --git a/test.lua b/test.lua\n--- a/test.lua\n+++ b/test.lua\n@@ -1 +1 @@\n-local x = 1\n+local x = 2\n"
+    },
+    {
+      "type": "test",
+      "title": "Run smoke",
+      "command": "nvim --headless -u NONE -c 'qa!'"
+    }
+  ]
+}
+```
+]]))
+agent.set(plan, { cwd = tmp })
+assert(agent.current().steps[2].type == "patch", "agent patch step did not parse")
+assert(agent.render():match("AI plan"), "agent plan did not render")
+local inspect_step = assert(agent.preview_next())
+assert(inspect_step.status == "done", "inspect step should complete after preview")
+local patch_step = assert(agent.preview_next_patch())
+assert(patch_step.status == "ready", "patch step should be ready after preview")
+assert(agent.mark_done())
+local run_step = assert(agent.preview_next_command())
+assert(run_step.status == "ready", "command step should be ready after preview")
+assert(agent.skip())
+assert(not agent.preview_next(), "agent should have no pending steps")
 
 print("ai.nvim smoke ok")

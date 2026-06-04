@@ -1,3 +1,4 @@
+local agent = require("ai.agent")
 local client = require("ai.client")
 local config = require("ai.config")
 local context = require("ai.context")
@@ -418,6 +419,139 @@ function M.git_cmd(cmd)
   command_request("git-command", command_prompt(cmd, "git"))
 end
 
+local function agent_prompt(task, root, buf, diagnostics, quickfix, git_diff, project_context)
+  return table.concat({
+    "Create a step-by-step AI agent plan for this Neovim coding task.",
+    "Return only a JSON object. Do not include markdown.",
+    "Do not assume actions were already performed.",
+    "Do not include destructive shell commands.",
+    "Prefer inspect steps before patch or command steps when information is incomplete.",
+    "Patch steps must include a unified diff in the `patch` field if and only if the patch is already clear from the provided context.",
+    "Command or test steps must include exactly one shell command in the `command` field.",
+    "",
+    "JSON schema:",
+    [[{"task":"string","summary":"string","steps":[{"type":"inspect|patch|command|test","title":"string","details":"string","patch":"optional unified diff","command":"optional shell command"}]}]],
+    "",
+    "Project root:",
+    root,
+    "",
+    "User task:",
+    task,
+    "",
+    "Current buffer:",
+    ("File: %s"):format(buf.path ~= "" and buf.path or "[No Name]"),
+    ("Filetype: %s"):format(buf.filetype ~= "" and buf.filetype or "unknown"),
+    "```" .. (buf.filetype ~= "" and buf.filetype or "text"),
+    buf.text,
+    "```",
+    "",
+    "Diagnostics:",
+    diagnostics ~= "" and diagnostics or "No diagnostics.",
+    "",
+    "Quickfix:",
+    quickfix ~= "" and quickfix or "Quickfix list is empty.",
+    "",
+    "Git context:",
+    git_diff ~= "" and git_diff or "No git context.",
+    "",
+    "Project search context:",
+    project_context ~= "" and project_context or "No project search context.",
+  }, "\n")
+end
+
+function M.agent(cmd)
+  local task = user_prompt(cmd, "Plan the next useful coding step.")
+  local root = context.root(0)
+  local bufnr = ui.open_output("agent", "Collecting agent context...")
+  local buf = context.buffer_context(0, math.floor(config.get().project.max_context_chars / 2))
+  local diagnostics = context.all_diagnostics_context(120)
+  local quickfix = context.quickfix_context(80)
+
+  context.git_diff(function(git_err, git_diff)
+    if git_err then
+      git_diff = "Git context unavailable:\n" .. git_err
+    end
+
+    ui.set_output(bufnr, "agent", "Searching project context...")
+    context.project_context(task, function(project_err, project_ctx)
+      if project_err then
+        project_ctx = "Project context unavailable:\n" .. project_err
+      end
+
+      ui.set_output(bufnr, "agent", "Requesting AI plan...")
+      client.chat(messages(agent_prompt(task, root, buf, diagnostics, quickfix, git_diff or "", project_ctx or ""), [[You are planning editor actions for ai.nvim.
+Return machine-readable JSON only.
+The plan must be reviewable and must not automatically modify files or run commands.]]), { stream = false }, function(err, text)
+        if err then
+          ui.set_output(bufnr, "agent-error", err)
+          return
+        end
+
+        local plan, parse_err = agent.parse(text)
+        if not plan then
+          ui.set_output(bufnr, "agent-error", parse_err .. "\n\n" .. text)
+          return
+        end
+
+        agent.set(plan, { task = task, cwd = root })
+        local rendered = agent.render()
+        if parse_err then
+          rendered = rendered .. "\n\n" .. parse_err
+        end
+        ui.set_output(bufnr, "agent-plan", rendered)
+      end)
+    end, root)
+  end, root)
+end
+
+local function agent_step(fn)
+  local _, err = fn()
+  if err then
+    ui.notify(err, vim.log.levels.ERROR)
+  end
+end
+
+function M.plan_next()
+  agent_step(agent.preview_next)
+end
+
+function M.plan_apply()
+  agent_step(agent.preview_next_patch)
+end
+
+function M.plan_run()
+  agent_step(agent.preview_next_command)
+end
+
+function M.plan_done()
+  local step, err = agent.mark_done()
+  if err then
+    ui.notify(err, vim.log.levels.ERROR)
+    return
+  end
+  ui.notify("Marked AI plan step done: " .. step.title)
+  ui.open_output("agent-plan", agent.render())
+end
+
+function M.plan_skip()
+  local step, err = agent.skip()
+  if err then
+    ui.notify(err, vim.log.levels.ERROR)
+    return
+  end
+  ui.notify("Skipped AI plan step: " .. step.title)
+  ui.open_output("agent-plan", agent.render())
+end
+
+function M.plan_show()
+  ui.open_output("agent-plan", agent.render())
+end
+
+function M.plan_reset()
+  agent.reset()
+  ui.notify("AI plan cleared.")
+end
+
 function M.chat(cmd)
   local prompt = cmd.args or ""
 
@@ -509,6 +643,14 @@ function M.setup()
   create_command("AICmd", M.cmd, { range = false })
   create_command("AIShell", M.shell, { range = false })
   create_command("AIGit", M.git_cmd, { range = false })
+  create_command("AIAgent", M.agent, { range = false })
+  create_command("AIPlanNext", M.plan_next, { nargs = 0, range = false })
+  create_command("AIPlanApply", M.plan_apply, { nargs = 0, range = false })
+  create_command("AIPlanRun", M.plan_run, { nargs = 0, range = false })
+  create_command("AIPlanDone", M.plan_done, { nargs = 0, range = false })
+  create_command("AIPlanSkip", M.plan_skip, { nargs = 0, range = false })
+  create_command("AIPlanShow", M.plan_show, { nargs = 0, range = false })
+  create_command("AIPlanReset", M.plan_reset, { nargs = 0, range = false })
   create_command("AIChat", M.chat, { range = false })
   create_command("AIChatReset", M.chat_reset, { nargs = 0, range = false })
   create_command("AIApply", ui.apply_pending, { nargs = 0, range = false })
