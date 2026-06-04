@@ -66,6 +66,7 @@ return {
         api_key_env = os.getenv "AI_NVIM_API_KEY_ENV" or "DEEPSEEK_API_KEY",
         model = os.getenv "AI_NVIM_MODEL" or "deepseek-v4-flash",
         stream = os.getenv "AI_NVIM_STREAM" ~= "0",
+        thinking = os.getenv "AI_NVIM_THINKING" == "1",
         temperature = tonumber(os.getenv "AI_NVIM_TEMPERATURE" or "") or 0.2,
       },
       chat = {
@@ -74,30 +75,6 @@ return {
     },
   },
 }
-```
-
-For local or compatible providers:
-
-```lua
-require("ai").setup({
-  provider = {
-    base_url = "http://localhost:11434/v1",
-    api_key = "",
-    model = "qwen2.5-coder",
-  },
-})
-```
-
-If your provider does not require a key, set the env var to an empty value or
-use:
-
-```lua
-require("ai").setup({
-  provider = {
-    api_key = "",
-    temperature = false, -- omit temperature for providers that reject it
-  },
-})
 ```
 
 ## Commands
@@ -215,6 +192,9 @@ codex.md
   they arrive, while tool-call arguments are buffered until the stream finishes
   and then dispatched. Patch and command preview requests stay non-streaming so
   the plugin can parse the complete result before previewing them.
+- `provider.thinking` defaults to `false`. DeepSeek-compatible providers receive
+  `thinking = { type = "disabled" }` by default; set `provider.thinking = true`
+  to opt into thinking mode.
 - `:AIAgent` generates a plan only. It does not apply patches or run commands.
   Use `:AIPlanApply` with `:AIApply`, or `:AIPlanRun` with `:AIRun`, then
   `:AIPlanDone` to advance the plan.

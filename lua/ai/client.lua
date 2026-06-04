@@ -65,6 +65,26 @@ local function provider_url(provider)
   return trim_slashes(provider.base_url) .. provider.endpoint
 end
 
+local function supports_thinking(provider)
+  if provider.thinking_supported ~= nil then
+    return not not provider.thinking_supported
+  end
+  return type(provider.base_url) == "string" and provider.base_url:lower():find("deepseek", 1, true) ~= nil
+end
+
+local function thinking_body(value)
+  if type(value) == "table" then
+    return value
+  end
+  if value == true then
+    return { type = "enabled" }
+  end
+  if value == false then
+    return { type = "disabled" }
+  end
+  return nil
+end
+
 local function api_key(provider)
   if provider.api_key ~= nil then
     return provider.api_key
@@ -109,6 +129,20 @@ local function make_request(messages, opts, stream)
 
   if opts.tool_choice then
     body.tool_choice = opts.tool_choice
+  end
+
+  local thinking = opts.thinking
+  if thinking == nil then
+    thinking = provider.thinking
+  end
+  local thinking_config = thinking_body(thinking)
+  if thinking_config and supports_thinking(provider) then
+    body.thinking = thinking_config
+  end
+
+  local reasoning_effort = opts.reasoning_effort or provider.reasoning_effort
+  if reasoning_effort and thinking_config and thinking_config.type == "enabled" then
+    body.reasoning_effort = reasoning_effort
   end
 
   local args = {
@@ -207,6 +241,11 @@ local function parse_stream_line(line, callbacks)
   local text = delta and text_from_content(delta.content)
   if text and text ~= "" and callbacks.on_delta then
     callbacks.on_delta(text)
+  end
+
+  local reasoning = delta and delta.reasoning_content
+  if type(reasoning) == "string" and reasoning ~= "" and callbacks.on_reasoning_delta then
+    callbacks.on_reasoning_delta(reasoning)
   end
 
   if delta and type(delta.tool_calls) == "table" and callbacks.on_tool_call_delta then

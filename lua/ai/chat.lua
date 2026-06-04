@@ -395,7 +395,7 @@ local function compact_tool_result(call, err, result)
 end
 
 local function native_tool_call_message(message)
-  return {
+  local req = {
     role = "assistant",
     content = message.content or "",
     tool_calls = {
@@ -409,6 +409,10 @@ local function native_tool_call_message(message)
       },
     },
   }
+  if type(message.reasoning_content) == "string" then
+    req.reasoning_content = message.reasoning_content
+  end
+  return req
 end
 
 local function request_messages()
@@ -516,6 +520,7 @@ local function parse_native_tool_calls(message)
         args = args,
         native = true,
         tool_call_id = item.id or ("ai_nvim_tool_" .. index),
+        reasoning_content = message.reasoning_content,
       })
     end
   end
@@ -560,14 +565,17 @@ local function append_stream_tool_call_delta(calls, deltas)
   end
 end
 
-local function stream_tool_call_message(calls)
+local function stream_tool_call_message(calls, reasoning_content)
   local tool_calls = {}
   for _, call in ipairs(calls) do
     if call and call["function"] and call["function"].name then
       table.insert(tool_calls, call)
     end
   end
-  return { tool_calls = tool_calls }
+  return {
+    tool_calls = tool_calls,
+    reasoning_content = reasoning_content,
+  }
 end
 
 local function append_tool_result(call, err, result)
@@ -806,6 +814,7 @@ function M.send(text)
         content = call.native and "" or tool_call_content(call),
         native = call.native,
         tool_call_id = call.tool_call_id,
+        reasoning_content = call.reasoning_content,
       })
       set_status("running tool", call.tool, tool_running_card(call.tool))
 
@@ -870,6 +879,7 @@ function M.send(text)
 
       if config.get().provider.stream then
         local assistant = ""
+        local reasoning_content = ""
         local stream_calls = {}
         M.active_request = client.chat_stream(request_messages(), opts, {
           on_delta = function(delta)
@@ -878,6 +888,12 @@ function M.send(text)
             end
             assistant = assistant .. delta
             set_status("streaming", "receiving response", "## Assistant\n\n" .. assistant)
+          end,
+          on_reasoning_delta = function(delta)
+            if stale() then
+              return
+            end
+            reasoning_content = reasoning_content .. delta
           end,
           on_tool_call_delta = function(deltas)
             if stale() then
@@ -896,7 +912,7 @@ function M.send(text)
               return
             end
             M.active_request = nil
-            handle_response(tool_rounds, assistant, stream_tool_call_message(stream_calls))
+            handle_response(tool_rounds, assistant, stream_tool_call_message(stream_calls, reasoning_content ~= "" and reasoning_content or nil))
           end,
         })
         return

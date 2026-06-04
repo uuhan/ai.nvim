@@ -90,6 +90,15 @@ local stream_content_payload = vim.json.encode({
     },
   },
 })
+local stream_reasoning_payload = vim.json.encode({
+  choices = {
+    {
+      delta = {
+        reasoning_content = "thinking ",
+      },
+    },
+  },
+})
 local stream_tool_payload = vim.json.encode({
   choices = {
     {
@@ -114,6 +123,7 @@ vim.fn.writefile({
   "#!/bin/sh",
   "cat >/dev/null",
   "cat <<'AI_NVIM_STREAM'",
+  "data: " .. stream_reasoning_payload,
   "data: " .. stream_content_payload,
   "data: " .. stream_tool_payload,
   "data: [DONE]",
@@ -133,6 +143,7 @@ config.setup({
 local client_stream_done = false
 local client_stream_err
 local client_stream_text = ""
+local client_reasoning_text = ""
 local client_tool_delta
 local client_finish_reason
 client.chat_stream({ { role = "user", content = "stream" } }, {
@@ -141,6 +152,9 @@ client.chat_stream({ { role = "user", content = "stream" } }, {
 }, {
   on_delta = function(delta)
     client_stream_text = client_stream_text .. delta
+  end,
+  on_reasoning_delta = function(delta)
+    client_reasoning_text = client_reasoning_text .. delta
   end,
   on_tool_call_delta = function(delta)
     client_tool_delta = delta
@@ -171,8 +185,53 @@ config.setup({
 })
 assert(not client_stream_err, client_stream_err)
 assert(client_stream_text == "hello ", "client stream did not parse text delta")
+assert(client_reasoning_text == "thinking ", "client stream did not parse reasoning delta")
 assert(client_tool_delta and client_tool_delta[1].id == "call_client_stream", "client stream did not parse tool call delta")
 assert(client_finish_reason == "tool_calls", "client stream did not parse finish reason")
+
+local capture_curl = vim.fn.tempname()
+local capture_body = vim.fn.tempname()
+vim.fn.writefile({
+  "#!/bin/sh",
+  ("cat >%s"):format(vim.fn.shellescape(capture_body)),
+  "cat <<'AI_NVIM_JSON'",
+  [[{"choices":[{"message":{"content":"ok"}}]}]],
+  "AI_NVIM_JSON",
+}, capture_curl)
+vim.fn.system({ "chmod", "+x", capture_curl })
+config.setup({
+  provider = {
+    base_url = "https://api.deepseek.com",
+    api_key = "",
+    curl = capture_curl,
+  },
+  chat = {
+    max_tool_model_chars = 80,
+  },
+})
+local capture_done = false
+local capture_err
+client.chat({ { role = "user", content = "thinking default" } }, {}, function(err)
+  capture_err = err
+  capture_done = true
+end)
+assert(vim.wait(5000, function()
+  return capture_done
+end), "timed out waiting for captured DeepSeek request")
+assert(not capture_err, capture_err)
+local captured = table.concat(vim.fn.readfile(capture_body), "\n")
+assert(captured:match([["thinking"%s*:%s*{]]) and captured:match([["type"%s*:%s*"disabled"]]), "DeepSeek request did not disable thinking by default")
+vim.fn.delete(capture_curl)
+vim.fn.delete(capture_body)
+config.setup({
+  provider = {
+    api_key = "",
+    stream = false,
+  },
+  chat = {
+    max_tool_model_chars = 80,
+  },
+})
 
 local editor_state = run_tool("nvim_editor_state")
 assert(editor_state.current_buffer.bufnr == tool_buf, "editor state current buffer mismatch")
@@ -372,6 +431,7 @@ client.chat_stream = function(messages, opts, callbacks)
 
   if stream_calls == 1 then
     assert(messages[1].content:match("Available tools"), "AIChat stream did not include tool registry")
+    callbacks.on_reasoning_delta("stream thinking")
     callbacks.on_delta("我先")
     callbacks.on_delta("看。")
     callbacks.on_tool_call_delta({
@@ -397,12 +457,17 @@ client.chat_stream = function(messages, opts, callbacks)
   end
 
   local saw_stream_tool_result = false
+  local saw_stream_reasoning = false
   for _, message in ipairs(messages) do
+    if message.role == "assistant" and message.tool_calls and message.reasoning_content == "stream thinking" then
+      saw_stream_reasoning = true
+    end
     if message.role == "tool" and message.tool_call_id == "call_stream_current_buffer" then
       saw_stream_tool_result = true
       break
     end
   end
+  assert(saw_stream_reasoning, "AIChat stream did not preserve reasoning content for native tool call")
   assert(saw_stream_tool_result, "AIChat stream did not feed native tool result back to model")
   callbacks.on_delta("stream final")
   callbacks.on_done()

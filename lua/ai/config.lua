@@ -12,6 +12,8 @@ local defaults = {
     temperature = 0.2,
     max_tokens = nil,
     stream = false,
+    thinking = false,
+    reasoning_effort = nil,
     extra_headers = {},
   },
   rules = {
