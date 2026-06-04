@@ -588,7 +588,9 @@ function M.is_open()
 end
 
 function M.toggle(opts)
-  if M.is_open() then
+  opts = opts or {}
+  local layout = opts.layout or "side"
+  if M.is_open() and M.layout == layout then
     M.close()
     return
   end

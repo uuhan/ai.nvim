@@ -2,6 +2,10 @@
 
 ![ai.nvim](./ai.png)
 
+---
+
+![ai.nvim](./ai-pop.png)
+
 A small Neovim AI assistant built around editor operations:
 
 - run prompts on a visual selection, paragraph, buffer, file, git diff, or project search context
@@ -30,6 +34,13 @@ local function ai_chat_toggle()
   vim.cmd.AIChatToggle()
 end
 
+local function ai_pop_chat_toggle()
+  if vim.fn.mode():match "^[iR]" then
+    vim.cmd.stopinsert()
+  end
+  vim.cmd.AIPopChatToggle()
+end
+
 ---@type LazySpec
 return {
   {
@@ -47,6 +58,7 @@ return {
     keys = {
       { "<C-/>", ai_chat_toggle, mode = { "n", "i" }, desc = "Toggle AI chat" },
       { "<C-_>", ai_chat_toggle, mode = { "n", "i" }, desc = "Toggle AI chat" },
+      { "<C-\\>", ai_pop_chat_toggle, mode = { "n", "i" }, desc = "Toggle AI popup chat" },
     },
     opts = {
       provider = {
@@ -153,6 +165,7 @@ Chat:
 :AIChat {message}            " open side chat; optional message sends immediately
 :AIPopChat {message}         " open floating chat; optional message sends immediately
 :AIChatToggle                " open or hide side chat
+:AIPopChatToggle             " open or hide floating chat
 :AIChatStop                  " stop the active chat request
 :AIChatReset
 ```

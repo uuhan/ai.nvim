@@ -34,6 +34,7 @@ local commands = {
   "AIChat",
   "AIPopChat",
   "AIChatToggle",
+  "AIPopChatToggle",
   "AIChatStop",
   "AIChatReset",
   "AIPing",
@@ -294,9 +295,12 @@ assert(pop_input_config.relative == "editor", "AIPopChat input pane is not float
 assert(pop_input_config.row > pop_messages_config.row, "AIPopChat input pane is not below messages pane")
 closed_messages_winid = chat.messages_winid
 closed_input_winid = chat.input_winid
+vim.cmd("AIPopChatToggle")
+assert(not vim.api.nvim_win_is_valid(closed_messages_winid), "AIPopChatToggle did not close messages pane")
+assert(not vim.api.nvim_win_is_valid(closed_input_winid), "AIPopChatToggle did not close input pane")
+vim.cmd("AIPopChatToggle")
+assert(chat.layout == "float", "AIPopChatToggle did not reopen float layout")
 chat.close()
-assert(not vim.api.nvim_win_is_valid(closed_messages_winid), "AIPopChat close did not close messages pane")
-assert(not vim.api.nvim_win_is_valid(closed_input_winid), "AIPopChat close did not close input pane")
 
 local target = vim.api.nvim_create_buf(true, false)
 vim.api.nvim_buf_set_lines(target, 0, -1, false, { "local x = 1", "print(x)" })
