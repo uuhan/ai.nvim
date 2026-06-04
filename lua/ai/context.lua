@@ -202,6 +202,34 @@ function M.quickfix_context(max_items)
   return table.concat(out, "\n")
 end
 
+function M.all_diagnostics_context(max_items)
+  local out = {}
+  local count = 0
+
+  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(bufnr) then
+      local diagnostics = vim.diagnostic.get(bufnr)
+      for _, diagnostic in ipairs(diagnostics) do
+        count = count + 1
+        if max_items and count > max_items then
+          table.insert(out, "[truncated]")
+          return table.concat(out, "\n")
+        end
+
+        local filename = vim.api.nvim_buf_get_name(bufnr)
+        table.insert(out, ("%s:%s:%s %s"):format(
+          filename,
+          (diagnostic.lnum or 0) + 1,
+          (diagnostic.col or 0) + 1,
+          diagnostic.message or ""
+        ))
+      end
+    end
+  end
+
+  return table.concat(out, "\n")
+end
+
 local function system_text(args, opts, cb)
   if not vim.system then
     vim.schedule(function()
@@ -220,8 +248,12 @@ local function system_text(args, opts, cb)
   end)
 end
 
-function M.git_diff(cb)
-  local root = M.root(0)
+function M.system_text(args, opts, cb)
+  system_text(args, opts, cb)
+end
+
+function M.git_diff(cb, root_override)
+  local root = root_override or M.root(0)
   system_text({ "git", "status", "--short" }, { cwd = root }, function(status_err, status)
     if status_err then
       cb(status_err)
@@ -285,8 +317,8 @@ local function trim_context(text, max_chars)
   return text:sub(1, max_chars) .. "\n[truncated]"
 end
 
-function M.project_context(prompt, cb)
-  local root = M.root(0)
+function M.project_context(prompt, cb, root_override)
+  local root = root_override or M.root(0)
   local opts = config.get().project
   local terms = extract_terms(prompt)
 

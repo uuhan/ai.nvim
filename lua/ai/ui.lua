@@ -1,7 +1,11 @@
 local config = require("ai.config")
+local context = require("ai.context")
+local patch = require("ai.patch")
+local runner = require("ai.runner")
 
 local M = {
   pending_edit = nil,
+  pending_patch = nil,
 }
 
 local function split_lines(text)
@@ -82,6 +86,8 @@ function M.preview_edit(opts)
   local replacement = strip_code_fence(opts.replacement or "")
   local replacement_lines = split_lines(replacement)
 
+  M.pending_patch = nil
+  runner.clear()
   M.pending_edit = {
     bufnr = opts.bufnr,
     path = opts.path,
@@ -128,7 +134,94 @@ function M.preview_edit(opts)
   end
 end
 
+function M.preview_patch(opts)
+  local patch_text = patch.extract(opts.text or "") or opts.text or ""
+  if patch_text == "" then
+    M.notify("AI response did not include a unified diff.", vim.log.levels.WARN)
+    if opts.output_bufnr then
+      M.set_output(opts.output_bufnr, opts.title or "patch-response", opts.text or "")
+    else
+      M.open_output(opts.title or "patch-response", opts.text or "")
+    end
+    return
+  end
+
+  M.pending_edit = nil
+  runner.clear()
+  M.pending_patch = {
+    patch = patch_text,
+    title = opts.title or "patch",
+    cwd = opts.cwd or context.root(0),
+  }
+
+  local text = table.concat({
+    "# AI patch preview",
+    "",
+    "Inspect the patch, then run :AIApply or :AIReject.",
+    "",
+    "```diff",
+    patch_text,
+    "```",
+  }, "\n")
+
+  if opts.output_bufnr then
+    M.set_output(opts.output_bufnr, opts.title or "patch-preview", text, "markdown")
+  else
+    M.open_output(opts.title or "patch-preview", text, "markdown")
+  end
+end
+
+function M.preview_command(opts)
+  local pending, err = runner.preview(opts.command or "", {
+    title = opts.title,
+    cwd = opts.cwd,
+  })
+
+  if err then
+    M.notify(err, vim.log.levels.ERROR)
+    if opts.output_bufnr then
+      M.set_output(opts.output_bufnr, opts.title or "command-error", err)
+    end
+    return
+  end
+
+  M.pending_edit = nil
+  M.pending_patch = nil
+
+  local text = table.concat({
+    "# AI command preview",
+    "",
+    "Inspect the command, then run :AIRun or :AIReject.",
+    "",
+    "CWD: " .. pending.cwd,
+    "",
+    "```sh",
+    pending.command,
+    "```",
+  }, "\n")
+
+  if opts.output_bufnr then
+    M.set_output(opts.output_bufnr, opts.title or "command-preview", text, "markdown")
+  else
+    M.open_output(opts.title or "command-preview", text, "markdown")
+  end
+end
+
 function M.apply_pending()
+  if M.pending_patch then
+    local pending = M.pending_patch
+    M.notify("Applying AI patch...")
+    patch.apply(pending.patch, function(err)
+      if err then
+        M.notify(err, vim.log.levels.ERROR)
+        return
+      end
+      M.pending_patch = nil
+      M.notify("AI patch applied.")
+    end, { cwd = pending.cwd })
+    return
+  end
+
   local edit = M.pending_edit
   if not edit then
     M.notify("No pending AI edit.", vim.log.levels.WARN)
@@ -151,9 +244,23 @@ function M.apply_pending()
   M.notify("AI edit applied.")
 end
 
+function M.run_pending_command()
+  M.notify("Running AI command...")
+  runner.run(function(err, output)
+    if err then
+      M.notify(err, vim.log.levels.ERROR)
+      M.open_output("command-error", err)
+      return
+    end
+    M.open_output("command-output", output, "markdown")
+  end)
+end
+
 function M.reject_pending()
   M.pending_edit = nil
-  M.notify("AI edit cleared.")
+  M.pending_patch = nil
+  runner.clear()
+  M.notify("AI pending action cleared.")
 end
 
 return M

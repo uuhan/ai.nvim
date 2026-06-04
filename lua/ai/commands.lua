@@ -1,6 +1,7 @@
 local client = require("ai.client")
 local config = require("ai.config")
 local context = require("ai.context")
+local locations = require("ai.locations")
 local ui = require("ai.ui")
 
 local M = {
@@ -31,15 +32,62 @@ local function messages(user_content, extra_system)
   }
 end
 
-local function request_output(title, req_messages, opts, bufnr)
+local function request_output(title, req_messages, opts, bufnr, on_success)
+  opts = opts or {}
   bufnr = bufnr or ui.open_output(title, "Requesting AI response...")
   ui.set_output(bufnr, title, "Requesting AI response...")
-  client.chat(req_messages, opts or {}, function(err, text)
+
+  local use_stream = opts.stream
+  if use_stream == nil then
+    use_stream = config.get().provider.stream
+  end
+
+  if use_stream then
+    local text = ""
+    client.chat_stream(req_messages, opts, {
+      on_delta = function(delta)
+        text = text .. delta
+        ui.set_output(bufnr, title, text)
+      end,
+      on_error = function(err)
+        ui.set_output(bufnr, title .. "-error", err)
+      end,
+      on_done = function()
+        if on_success then
+          on_success(text, bufnr)
+        end
+      end,
+    })
+    return
+  end
+
+  client.chat(req_messages, opts, function(err, text)
     if err then
       ui.set_output(bufnr, title .. "-error", err)
       return
     end
     ui.set_output(bufnr, title, text)
+    if on_success then
+      on_success(text, bufnr)
+    end
+  end)
+end
+
+local function request_patch(title, req_messages, bufnr)
+  local cwd = context.root(0)
+  bufnr = bufnr or ui.open_output(title, "Requesting AI patch...")
+  ui.set_output(bufnr, title, "Requesting AI patch...")
+  client.chat(req_messages, {}, function(err, text)
+    if err then
+      ui.set_output(bufnr, title .. "-error", err)
+      return
+    end
+    ui.preview_patch({
+      title = title,
+      text = text,
+      cwd = cwd,
+      output_bufnr = bufnr,
+    })
   end)
 end
 
@@ -95,6 +143,14 @@ local function user_prompt(cmd, fallback)
     return fallback
   end
   return args
+end
+
+local function rel_path(path)
+  local root = context.root(0)
+  if path:sub(1, #root + 1) == root .. "/" then
+    return path:sub(#root + 2)
+  end
+  return path
 end
 
 local function full_buffer_prompt(cmd, instruction)
@@ -181,10 +237,12 @@ function M.fix_diagnostic()
   end
 
   local prompt = table.concat({
-    "Fix or explain the following Neovim LSP diagnostic.",
-    "Prefer a minimal patch. If a patch is useful, show it as a unified diff.",
+    "Fix the following Neovim LSP diagnostic.",
+    "Return only a unified diff that can be applied with git apply.",
+    "Use paths relative to the project root.",
     "",
-    ("File: %s"):format(diag.path ~= "" and diag.path or "[No Name]"),
+    ("Project root: %s"):format(context.root(0)),
+    ("File: %s"):format(diag.path ~= "" and rel_path(diag.path) or "[No Name]"),
     ("Filetype: %s"):format(diag.filetype ~= "" and diag.filetype or "unknown"),
     ("Diagnostic: %s"):format(diag.diagnostic.message or ""),
     ("Context lines: %d-%d"):format(diag.context_start, diag.context_end),
@@ -194,7 +252,27 @@ function M.fix_diagnostic()
     "```",
   }, "\n")
 
-  request_output("diagnostic-fix", messages(prompt))
+  request_patch("diagnostic-fix", messages(prompt))
+end
+
+function M.fix_all_diagnostics()
+  local diagnostics = context.all_diagnostics_context(120)
+  if diagnostics == "" then
+    ui.notify("No diagnostics found in loaded buffers.", vim.log.levels.WARN)
+    return
+  end
+
+  local prompt = table.concat({
+    "Fix these Neovim LSP diagnostics.",
+    "Return only a unified diff that can be applied with git apply.",
+    "Use paths relative to the project root.",
+    "",
+    ("Project root: %s"):format(context.root(0)),
+    "",
+    diagnostics,
+  }, "\n")
+
+  request_patch("diagnostics-fix-all", messages(prompt))
 end
 
 function M.fix_quickfix()
@@ -204,15 +282,19 @@ function M.fix_quickfix()
     return
   end
   local prompt = table.concat({
-    "Review these quickfix entries and propose the smallest fixes.",
-    "Group related errors and include file/line references.",
+    "Fix these quickfix entries.",
+    "Return only a unified diff that can be applied with git apply.",
+    "Use paths relative to the project root.",
+    "",
+    ("Project root: %s"):format(context.root(0)),
     "",
     qf,
   }, "\n")
-  request_output("quickfix-fix", messages(prompt))
+  request_patch("quickfix-fix", messages(prompt))
 end
 
-local function git_request(title, instruction)
+local function git_request(title, instruction, on_success)
+  local root = context.root(0)
   local bufnr = ui.open_output(title, "Reading git diff...")
   context.git_diff(function(err, diff)
     if err then
@@ -228,12 +310,21 @@ local function git_request(title, instruction)
       instruction,
       "",
       diff,
-    }, "\n")), nil, bufnr)
-  end)
+    }, "\n")), nil, bufnr, function(text, output_bufnr)
+      if on_success then
+        on_success(text, output_bufnr, root)
+      end
+    end)
+  end, root)
 end
 
 function M.review_diff()
-  git_request("diff-review", "Review this git diff. Prioritize correctness bugs, regressions, missing tests, and security issues. Use file/line references when possible.")
+  git_request("diff-review", "Review this git diff. Prioritize correctness bugs, regressions, missing tests, and security issues. Use file/line references when possible.", function(text, _, root)
+    local count = locations.populate(text, "AI diff review", root)
+    if count > 0 then
+      ui.notify(("Added %d AI review locations."):format(count))
+    end
+  end)
 end
 
 function M.explain_diff()
@@ -241,7 +332,12 @@ function M.explain_diff()
 end
 
 function M.find_bug_in_diff()
-  git_request("diff-bugs", "Look for likely bugs in this git diff. Be strict. If there are no clear bugs, say so.")
+  git_request("diff-bugs", "Look for likely bugs in this git diff. Be strict. If there are no clear bugs, say so. Use file:line references for findings.", function(text, _, root)
+    local count = locations.populate(text, "AI diff bugs", root)
+    if count > 0 then
+      ui.notify(("Added %d AI bug locations."):format(count))
+    end
+  end)
 end
 
 function M.commit_message()
@@ -250,6 +346,7 @@ end
 
 function M.project(cmd)
   local prompt = user_prompt(cmd, "Answer the question using project context.")
+  local root = context.root(0)
   local bufnr = ui.open_output("project", "Searching project context...")
   context.project_context(prompt, function(err, project_context)
     if err then
@@ -266,7 +363,59 @@ function M.project(cmd)
       "Project context:",
       project_context,
     }, "\n")), nil, bufnr)
+  end, root)
+end
+
+local function command_request(title, prompt)
+  local cwd = context.root(0)
+  local bufnr = ui.open_output(title, "Requesting shell command...")
+  client.chat(messages(prompt), {}, function(err, text)
+    if err then
+      ui.set_output(bufnr, title .. "-error", err)
+      return
+    end
+    ui.preview_command({
+      title = title,
+      command = text,
+      cwd = cwd,
+      output_bufnr = bufnr,
+    })
   end)
+end
+
+local function command_prompt(cmd, mode)
+  local task = user_prompt(cmd, "Generate a useful command for the current project.")
+  local constraints = {
+    "Generate exactly one shell command for the user's task.",
+    "Return only the command, with no markdown and no explanation.",
+    "Do not include destructive commands.",
+    "Assume the command will be reviewed before execution.",
+  }
+
+  if mode == "git" then
+    table.insert(constraints, "The command must be a git command.")
+  end
+
+  return table.concat(vim.list_extend(constraints, {
+    "",
+    ("Project root: %s"):format(context.root(0)),
+    ("Shell: %s"):format(vim.o.shell ~= "" and vim.o.shell or "sh"),
+    "",
+    "User task:",
+    task,
+  }), "\n")
+end
+
+function M.cmd(cmd)
+  command_request("command", command_prompt(cmd, "shell"))
+end
+
+function M.shell(cmd)
+  M.cmd(cmd)
+end
+
+function M.git_cmd(cmd)
+  command_request("git-command", command_prompt(cmd, "git"))
 end
 
 function M.chat(cmd)
@@ -282,6 +431,23 @@ function M.chat(cmd)
     }
     vim.list_extend(req, M.chat_history)
     local bufnr = ui.open_output("chat", "Requesting AI response...")
+    if config.get().provider.stream then
+      local text = ""
+      client.chat_stream(req, {}, {
+        on_delta = function(delta)
+          text = text .. delta
+          ui.set_output(bufnr, "chat", text)
+        end,
+        on_error = function(err)
+          ui.set_output(bufnr, "chat-error", err)
+        end,
+        on_done = function()
+          table.insert(M.chat_history, { role = "assistant", content = text })
+        end,
+      })
+      return
+    end
+
     client.chat(req, {}, function(err, text)
       if err then
         ui.set_output(bufnr, "chat-error", err)
@@ -332,6 +498,7 @@ function M.setup()
   create_command("AIFile", M.file, { range = false })
   create_command("AISummarizeFile", M.summarize_file, { nargs = 0, range = false })
   create_command("AIFixDiagnostic", M.fix_diagnostic, { nargs = 0, range = false })
+  create_command("AIFixAllDiagnostics", M.fix_all_diagnostics, { nargs = 0, range = false })
   create_command("AIFixQuickfix", M.fix_quickfix, { nargs = 0, range = false })
   create_command("AIReviewDiff", M.review_diff, { nargs = 0, range = false })
   create_command("AIExplainDiff", M.explain_diff, { nargs = 0, range = false })
@@ -339,9 +506,13 @@ function M.setup()
   create_command("AICommitMessage", M.commit_message, { nargs = 0, range = false })
   create_command("AIProject", M.project, { range = false })
   create_command("AIAskProject", M.project, { range = false })
+  create_command("AICmd", M.cmd, { range = false })
+  create_command("AIShell", M.shell, { range = false })
+  create_command("AIGit", M.git_cmd, { range = false })
   create_command("AIChat", M.chat, { range = false })
   create_command("AIChatReset", M.chat_reset, { nargs = 0, range = false })
   create_command("AIApply", ui.apply_pending, { nargs = 0, range = false })
+  create_command("AIRun", ui.run_pending_command, { nargs = 0, range = false })
   create_command("AIReject", ui.reject_pending, { nargs = 0, range = false })
   create_command("AIRules", M.show_rules, { nargs = 0, range = false })
   create_command("AIConfig", M.show_config, { nargs = 0, range = false })

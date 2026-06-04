@@ -11,6 +11,7 @@ local defaults = {
     timeout_ms = 60000,
     temperature = 0.2,
     max_tokens = nil,
+    stream = false,
     extra_headers = {},
   },
   rules = {
@@ -33,6 +34,18 @@ local defaults = {
   ui = {
     output_cmd = "botright vertical 80new",
     filetype = "markdown",
+  },
+  safety = {
+    allow_dangerous_commands = false,
+    blocked_command_patterns = {
+      "rm%s+%-rf%s+/",
+      "git%s+reset%s+%-%-hard",
+      "git%s+clean%s+%-[fdxFDX]",
+      "mkfs",
+      "dd%s+if=",
+      ":%(%)%s*{%s*:%|:%s*&%s*}:%s*;",
+      "sudo%s+rm",
+    },
   },
 }
 

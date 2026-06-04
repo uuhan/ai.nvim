@@ -28,6 +28,7 @@ With lazy.nvim:
       model = "gpt-4.1-mini",
       api_key_env = "OPENAI_API_KEY",
       base_url = "https://api.openai.com/v1",
+      stream = true,
     },
   },
 }
@@ -86,11 +87,21 @@ Diagnostics and git:
 
 ```vim
 :AIFixDiagnostic
+:AIFixAllDiagnostics
 :AIFixQuickfix
 :AIReviewDiff
 :AIExplainDiff
 :AIFindBugInDiff
 :AICommitMessage
+```
+
+Shell commands:
+
+```vim
+:AICmd {task}                " generate a shell command for review
+:AIShell {task}              " alias for :AICmd
+:AIGit {task}                " generate a git command
+:AIRun                       " run the latest generated command
 ```
 
 Chat:
@@ -120,6 +131,15 @@ codex.md
 ## Notes
 
 - Edits are never applied automatically. Use `:AIApply` after inspecting the diff.
+- AI-generated patches are never applied automatically. Use `:AIApply` after inspecting the patch.
+- AI-generated shell commands are never executed automatically. Use `:AIRun` after inspecting the command.
 - `:AIProject` uses `rg` when available. It does not maintain a vector database.
 - `:AIReviewDiff` and related commands read `git diff`, `git diff --cached`, and
   `git status --short`.
+- `:AIReviewDiff` and `:AIFindBugInDiff` parse `file:line` references from the
+  AI response and place them in the location list when possible.
+- Command execution has a small safety blocklist by default. Set
+  `safety.allow_dangerous_commands = true` only if you want `:AIRun` to skip it.
+- Set `provider.stream = true` to stream normal answers and chat responses.
+  Patch and command requests stay non-streaming so the plugin can parse the
+  complete result before previewing it.

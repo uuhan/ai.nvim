@@ -19,6 +19,7 @@ Example:
       base_url = "https://api.openai.com/v1",
       api_key_env = "OPENAI_API_KEY",
       model = "gpt-4.1-mini",
+      stream = true,
     },
   })
 <
@@ -56,11 +57,18 @@ Buffer and project:
 
 Diagnostics and git:
   :AIFixDiagnostic          Ask about the diagnostic under the cursor.
+  :AIFixAllDiagnostics      Ask for a patch for loaded-buffer diagnostics.
   :AIFixQuickfix            Ask about the quickfix list.
   :AIReviewDiff             Review git diff and staged diff.
   :AIExplainDiff            Explain git diff and staged diff.
   :AIFindBugInDiff          Search git diff for likely bugs.
   :AICommitMessage          Generate a commit message.
+
+Shell commands:
+  :AICmd {task}              Generate a shell command for review.
+  :AIShell {task}            Alias for :AICmd.
+  :AIGit {task}              Generate a git command for review.
+  :AIRun                     Run the latest generated command.
 
 Chat:
   :AIChat {message}         Continue a simple chat session.
