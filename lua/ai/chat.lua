@@ -523,6 +523,53 @@ local function parse_native_tool_calls(message)
   return calls
 end
 
+local function append_stream_tool_call_delta(calls, deltas)
+  if type(deltas) ~= "table" then
+    return
+  end
+
+  for _, item in ipairs(deltas) do
+    local position = tonumber(item.index)
+    if position then
+      position = position + 1
+    else
+      position = math.max(1, #calls)
+    end
+
+    local call = calls[position] or { ["function"] = {} }
+    call.id = item.id or call.id
+    call.type = item.type or call.type or "function"
+
+    local fn = item["function"]
+    if type(fn) == "table" then
+      call["function"] = call["function"] or {}
+      if type(fn.name) == "string" and fn.name ~= "" then
+        local current = call["function"].name or ""
+        if current == "" then
+          call["function"].name = fn.name
+        elseif current ~= fn.name and not current:find(fn.name, 1, true) then
+          call["function"].name = current .. fn.name
+        end
+      end
+      if type(fn.arguments) == "string" and fn.arguments ~= "" then
+        call["function"].arguments = (call["function"].arguments or "") .. fn.arguments
+      end
+    end
+
+    calls[position] = call
+  end
+end
+
+local function stream_tool_call_message(calls)
+  local tool_calls = {}
+  for _, call in ipairs(calls) do
+    if call and call["function"] and call["function"].name then
+      table.insert(tool_calls, call)
+    end
+  end
+  return { tool_calls = tool_calls }
+end
+
 local function append_tool_result(call, err, result)
   local content = err or json_encode(result)
   table.insert(M.history, {
@@ -778,18 +825,84 @@ function M.send(text)
       end)
     end
 
-    local function request_next(tool_rounds)
+    local request_next
+
+    local function handle_response(tool_rounds, response, message)
+      local calls = parse_native_tool_calls(message)
+      if #calls > 0 then
+        append_assistant_text(response)
+      else
+        local text_call = parse_tool_call(response)
+        if text_call then
+          append_assistant_text(text_call.preface)
+          calls = { text_call }
+        end
+      end
+
+      if #calls == 0 then
+        append_assistant_text(response)
+        finish("idle")
+        return
+      end
+
+      if tool_rounds + #calls > max_rounds then
+        finish("error", "tool round limit reached", "## Error\n\nAIChat stopped after reaching the tool round limit.")
+        return
+      end
+
+      execute_calls(calls, 1, tool_rounds, function(next_tool_round)
+        request_next(next_tool_round)
+      end)
+    end
+
+    request_next = function(tool_rounds)
       if stale() then
         return
       end
 
-      local opts = { stream = false }
+      local opts = {}
       if config.get().chat.native_tools ~= false then
         opts.tools = tools.openai_tools()
         opts.tool_choice = "auto"
       end
 
       set_status("thinking", "waiting for model", "## Assistant\n\n...")
+
+      if config.get().provider.stream then
+        local assistant = ""
+        local stream_calls = {}
+        M.active_request = client.chat_stream(request_messages(), opts, {
+          on_delta = function(delta)
+            if stale() then
+              return
+            end
+            assistant = assistant .. delta
+            set_status("streaming", "receiving response", "## Assistant\n\n" .. assistant)
+          end,
+          on_tool_call_delta = function(deltas)
+            if stale() then
+              return
+            end
+            append_stream_tool_call_delta(stream_calls, deltas)
+            if assistant == "" then
+              set_status("streaming", "receiving tool call", "## Assistant\n\n...")
+            end
+          end,
+          on_error = function(err)
+            finish("error", "stream failed", "## Error\n\n" .. err)
+          end,
+          on_done = function()
+            if stale() then
+              return
+            end
+            M.active_request = nil
+            handle_response(tool_rounds, assistant, stream_tool_call_message(stream_calls))
+          end,
+        })
+        return
+      end
+
+      opts.stream = false
       M.active_request = client.chat(request_messages(), opts, function(err, response, _, message)
         if stale() then
           return
@@ -801,31 +914,7 @@ function M.send(text)
           return
         end
 
-        local calls = parse_native_tool_calls(message)
-        if #calls > 0 then
-          append_assistant_text(response)
-        else
-          local text_call = parse_tool_call(response)
-          if text_call then
-            append_assistant_text(text_call.preface)
-            calls = { text_call }
-          end
-        end
-
-        if #calls == 0 then
-          append_assistant_text(response)
-          finish("idle")
-          return
-        end
-
-        if tool_rounds + #calls > max_rounds then
-          finish("error", "tool round limit reached", "## Error\n\nAIChat stopped after reaching the tool round limit.")
-          return
-        end
-
-        execute_calls(calls, 1, tool_rounds, function(next_tool_round)
-          request_next(next_tool_round)
-        end)
+        handle_response(tool_rounds, response, message)
       end)
     end
 

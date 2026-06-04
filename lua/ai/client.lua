@@ -208,6 +208,14 @@ local function parse_stream_line(line, callbacks)
   if text and text ~= "" and callbacks.on_delta then
     callbacks.on_delta(text)
   end
+
+  if delta and type(delta.tool_calls) == "table" and callbacks.on_tool_call_delta then
+    callbacks.on_tool_call_delta(delta.tool_calls)
+  end
+
+  if choice and choice.finish_reason and callbacks.on_finish then
+    callbacks.on_finish(choice.finish_reason)
+  end
 end
 
 function M.chat_stream(messages, opts, callbacks)

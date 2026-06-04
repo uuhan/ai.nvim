@@ -210,10 +210,11 @@ codex.md
   git diff, project files/search, and patch/command preview.
 - Command execution has a small safety blocklist by default. Set
   `safety.allow_dangerous_commands = true` only if you want `:AIRun` to skip it.
-- Set `provider.stream = true` to stream normal answers and AIChat requests
-  when `chat.tools_enabled = false`. Patch, command, and AIChat tool-loop
-  requests stay non-streaming so the plugin can parse the complete result before
-  previewing it or dispatching tools.
+- Set `provider.stream = true` to stream normal answers and AIChat text.
+  AIChat also supports streaming tool-call responses: text deltas are shown as
+  they arrive, while tool-call arguments are buffered until the stream finishes
+  and then dispatched. Patch and command preview requests stay non-streaming so
+  the plugin can parse the complete result before previewing them.
 - `:AIAgent` generates a plan only. It does not apply patches or run commands.
   Use `:AIPlanApply` with `:AIApply`, or `:AIPlanRun` with `:AIRun`, then
   `:AIPlanDone` to advance the plan.

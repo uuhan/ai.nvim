@@ -72,12 +72,107 @@ local tool_buf = vim.api.nvim_get_current_buf()
 
 local tools = require("ai.tools")
 local client = require("ai.client")
+local config = require("ai.config")
 assert(#tools.list() >= 10, "tool registry is too small")
 assert(#tools.openai_tools() == #tools.list(), "OpenAI tool export size mismatch")
 local editor_state_tool = tools.openai_tools()[1]
 local editor_state_schema_json = vim.json.encode(editor_state_tool["function"].parameters)
 assert(editor_state_schema_json:match([["properties":{}]]), "OpenAI tool schema did not encode empty properties as object")
 assert(tools.describe():match("nvim_current_buffer"), "tool description missing current buffer")
+
+local fake_curl = vim.fn.tempname()
+local stream_content_payload = vim.json.encode({
+  choices = {
+    {
+      delta = {
+        content = "hello ",
+      },
+    },
+  },
+})
+local stream_tool_payload = vim.json.encode({
+  choices = {
+    {
+      delta = {
+        tool_calls = {
+          {
+            index = 0,
+            id = "call_client_stream",
+            type = "function",
+            ["function"] = {
+              name = "nvim_current_buffer",
+              arguments = "{}",
+            },
+          },
+        },
+      },
+      finish_reason = "tool_calls",
+    },
+  },
+})
+vim.fn.writefile({
+  "#!/bin/sh",
+  "cat >/dev/null",
+  "cat <<'AI_NVIM_STREAM'",
+  "data: " .. stream_content_payload,
+  "data: " .. stream_tool_payload,
+  "data: [DONE]",
+  "AI_NVIM_STREAM",
+}, fake_curl)
+vim.fn.system({ "chmod", "+x", fake_curl })
+config.setup({
+  provider = {
+    api_key = "",
+    curl = fake_curl,
+    stream = true,
+  },
+  chat = {
+    max_tool_model_chars = 80,
+  },
+})
+local client_stream_done = false
+local client_stream_err
+local client_stream_text = ""
+local client_tool_delta
+local client_finish_reason
+client.chat_stream({ { role = "user", content = "stream" } }, {
+  tools = { tools.openai_tools()[1] },
+  tool_choice = "auto",
+}, {
+  on_delta = function(delta)
+    client_stream_text = client_stream_text .. delta
+  end,
+  on_tool_call_delta = function(delta)
+    client_tool_delta = delta
+  end,
+  on_finish = function(reason)
+    client_finish_reason = reason
+  end,
+  on_error = function(err)
+    client_stream_err = err
+    client_stream_done = true
+  end,
+  on_done = function()
+    client_stream_done = true
+  end,
+})
+assert(vim.wait(5000, function()
+  return client_stream_done
+end), "timed out waiting for client stream parser")
+vim.fn.delete(fake_curl)
+config.setup({
+  provider = {
+    api_key = "",
+    stream = false,
+  },
+  chat = {
+    max_tool_model_chars = 80,
+  },
+})
+assert(not client_stream_err, client_stream_err)
+assert(client_stream_text == "hello ", "client stream did not parse text delta")
+assert(client_tool_delta and client_tool_delta[1].id == "call_client_stream", "client stream did not parse tool call delta")
+assert(client_finish_reason == "tool_calls", "client stream did not parse finish reason")
 
 local editor_state = run_tool("nvim_editor_state")
 assert(editor_state.current_buffer.bufnr == tool_buf, "editor state current buffer mismatch")
@@ -257,6 +352,81 @@ assert(folded_line, "AIChat did not include foldable tool result JSON")
 vim.api.nvim_win_call(chat.messages_winid, function()
   assert(vim.fn.foldclosed(folded_line) > 0, "AIChat did not fold tool result details")
 end)
+
+config.setup({
+  provider = {
+    api_key = "",
+    stream = true,
+  },
+  chat = {
+    max_tool_model_chars = 80,
+  },
+})
+chat.clear()
+local original_chat_stream = client.chat_stream
+local stream_calls = 0
+client.chat_stream = function(messages, opts, callbacks)
+  stream_calls = stream_calls + 1
+  assert(type(opts.tools) == "table" and #opts.tools > 0, "AIChat stream did not send native tool definitions")
+  assert(opts.tool_choice == "auto", "AIChat stream did not enable native tool choice")
+
+  if stream_calls == 1 then
+    assert(messages[1].content:match("Available tools"), "AIChat stream did not include tool registry")
+    callbacks.on_delta("我先")
+    callbacks.on_delta("看。")
+    callbacks.on_tool_call_delta({
+      {
+        index = 0,
+        id = "call_stream_current_buffer",
+        type = "function",
+        ["function"] = {
+          name = "nvim_current_buffer",
+        },
+      },
+    })
+    callbacks.on_tool_call_delta({
+      {
+        index = 0,
+        ["function"] = {
+          arguments = "{}",
+        },
+      },
+    })
+    callbacks.on_done()
+    return
+  end
+
+  local saw_stream_tool_result = false
+  for _, message in ipairs(messages) do
+    if message.role == "tool" and message.tool_call_id == "call_stream_current_buffer" then
+      saw_stream_tool_result = true
+      break
+    end
+  end
+  assert(saw_stream_tool_result, "AIChat stream did not feed native tool result back to model")
+  callbacks.on_delta("stream final")
+  callbacks.on_done()
+end
+
+chat.send("stream current buffer")
+assert(vim.wait(5000, function()
+  return not chat.active
+end), "timed out waiting for streaming AIChat harness")
+client.chat_stream = original_chat_stream
+config.setup({
+  provider = {
+    api_key = "",
+    stream = false,
+  },
+  chat = {
+    max_tool_model_chars = 80,
+  },
+})
+assert(stream_calls == 2, "AIChat stream did not complete the tool loop")
+assert(chat.history[#chat.history].content == "stream final", "AIChat stream did not store final assistant reply")
+rendered_chat = table.concat(vim.api.nvim_buf_get_lines(chat.messages_bufnr, 0, -1, false), "\n")
+assert(rendered_chat:match("我先看。"), "AIChat stream did not keep streamed assistant preface")
+assert(rendered_chat:match("> %[!NOTE%] Tool call: nvim_current_buffer"), "AIChat stream did not render native tool call")
 
 local stopped_request = false
 client.chat = function(_, opts)
