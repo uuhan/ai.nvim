@@ -1,0 +1,50 @@
+local M = {}
+
+local defaults = {
+  provider = {
+    base_url = "https://api.openai.com/v1",
+    endpoint = "/chat/completions",
+    model = "gpt-4.1-mini",
+    api_key_env = "OPENAI_API_KEY",
+    api_key = nil,
+    curl = "curl",
+    timeout_ms = 60000,
+    temperature = 0.2,
+    max_tokens = nil,
+    extra_headers = {},
+  },
+  rules = {
+    enabled = true,
+    max_chars = 12000,
+    files = {
+      ".nvim/ai.md",
+      ".ai/rules.md",
+      "AGENTS.md",
+      "CLAUDE.md",
+      "codex.md",
+    },
+  },
+  project = {
+    markers = { ".git", "Cargo.toml", "package.json", "go.mod", "pyproject.toml", "Makefile" },
+    max_context_chars = 30000,
+    max_rg_matches = 80,
+    max_file_list = 120,
+  },
+  ui = {
+    output_cmd = "botright vertical 80new",
+    filetype = "markdown",
+  },
+}
+
+M.options = vim.deepcopy(defaults)
+
+function M.setup(opts)
+  M.options = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts or {})
+  return M.options
+end
+
+function M.get()
+  return M.options
+end
+
+return M

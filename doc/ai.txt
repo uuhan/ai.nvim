@@ -1,0 +1,85 @@
+*ai.nvim* AI editing operations for Neovim
+
+==============================================================================
+CONTENTS                                                          *ai-contents*
+
+Setup                 |ai-setup|
+Commands              |ai-commands|
+Project rules         |ai-rules|
+
+==============================================================================
+SETUP                                                                *ai-setup*
+
+ai.nvim uses an OpenAI-compatible chat completions endpoint.
+
+Example:
+>
+  require("ai").setup({
+    provider = {
+      base_url = "https://api.openai.com/v1",
+      api_key_env = "OPENAI_API_KEY",
+      model = "gpt-4.1-mini",
+    },
+  })
+<
+
+For local providers:
+>
+  require("ai").setup({
+    provider = {
+      base_url = "http://localhost:11434/v1",
+      api_key = "",
+      model = "qwen2.5-coder",
+    },
+  })
+<
+
+==============================================================================
+COMMANDS                                                          *ai-commands*
+
+Core:
+  :AI {prompt}              Ask about the visual selection or current paragraph.
+  :AIExplain                Explain selected/current code.
+  :AIEdit {instruction}     Generate replacement text and preview a diff.
+  :AIRefactor               Refactor selected/current code.
+  :AIFix                    Fix selected/current code.
+  :AITest                   Suggest focused tests.
+  :AIApply                  Apply the latest AI edit preview.
+  :AIReject                 Clear the latest AI edit preview.
+
+Buffer and project:
+  :AIBuffer {prompt}        Ask with the current buffer as context.
+  :AIFile {prompt}          Alias for :AIBuffer.
+  :AISummarizeFile          Summarize current file structure.
+  :AIProject {question}     Search project context with rg, then ask.
+  :AIAskProject {question}  Alias for :AIProject.
+
+Diagnostics and git:
+  :AIFixDiagnostic          Ask about the diagnostic under the cursor.
+  :AIFixQuickfix            Ask about the quickfix list.
+  :AIReviewDiff             Review git diff and staged diff.
+  :AIExplainDiff            Explain git diff and staged diff.
+  :AIFindBugInDiff          Search git diff for likely bugs.
+  :AICommitMessage          Generate a commit message.
+
+Chat:
+  :AIChat {message}         Continue a simple chat session.
+  :AIChatReset              Clear chat history.
+
+Config:
+  :AIConfig                 Show resolved ai.nvim config.
+  :AIRules                  Show included project rules.
+
+==============================================================================
+PROJECT RULES                                                        *ai-rules*
+
+When present, ai.nvim includes these files in the system prompt:
+
+  .nvim/ai.md
+  .ai/rules.md
+  AGENTS.md
+  CLAUDE.md
+  codex.md
+
+This lets each project define stable instructions such as preferred error
+handling, style constraints, and patch rules.
