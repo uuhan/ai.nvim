@@ -30,7 +30,7 @@ local commands = {
   "AIPlanReset",
   "AIFixAllDiagnostics",
   "AIReviewDiff",
-  "AIProject",
+  "AISearchProject",
   "AIChat",
   "AIPopChat",
   "AIChatToggle",

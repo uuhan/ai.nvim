@@ -1358,7 +1358,7 @@ register({
 register({
   name = "nvim_project_search",
   mode = "read",
-  description = "Search project context for a query using the same rg-backed context path as :AIProject.",
+  description = "Search project context for a query using the same rg-backed context path as :AISearchProject.",
   input_schema = {
     type = "object",
     required = { "query" },

@@ -100,7 +100,8 @@ Core editing:
 
 Read-only one-shot commands render their response in a focused floating Markdown
 window. This includes `:AI`, `:AIExplain`, `:AITest`, `:AIBuffer`, `:AIFile`,
-`:AISummarizeFile`, `:AIProject`, `:AIExplainDiff`, and `:AICommitMessage`.
+`:AISummarizeFile`, `:AISearchProject`, `:AIExplainDiff`, and
+`:AICommitMessage`.
 Press `q` or `<Esc>` to close it.
 
 Buffer and project context:
@@ -109,8 +110,7 @@ Buffer and project context:
 :AIBuffer {prompt}
 :AIFile {prompt}
 :AISummarizeFile
-:AIProject {question}
-:AIAskProject {question}
+:AISearchProject {question}
 ```
 
 Diagnostics and git:
@@ -188,7 +188,7 @@ codex.md
 - Edits are never applied automatically. Use `:AIApply` after inspecting the diff.
 - AI-generated patches are never applied automatically. Use `:AIApply` after inspecting the patch.
 - AI-generated shell commands are never executed automatically. Use `:AIRun` after inspecting the command.
-- `:AIProject` uses `rg` when available. It does not maintain a vector database.
+- `:AISearchProject` uses `rg` when available. It does not maintain a vector database.
 - `:AIReviewDiff` and related commands read `git diff`, `git diff --cached`, and
   `git status --short`.
 - `:AIReviewDiff` and `:AIFindBugInDiff` parse `file:line` references from the

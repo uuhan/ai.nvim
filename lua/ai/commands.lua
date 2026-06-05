@@ -680,7 +680,7 @@ function M.commit_message()
   git_request("commit-message", "Write a concise commit message for this diff. Return only the commit message.", nil, { output = "popup" })
 end
 
-function M.project(cmd)
+function M.search_project(cmd)
   local prompt = user_prompt(cmd, "Answer the question using project context.")
   local root = context.root(0)
   local opts = { output = "popup" }
@@ -1059,8 +1059,7 @@ function M.setup()
   create_command("AIExplainDiff", M.explain_diff, { nargs = 0, range = false })
   create_command("AIFindBugInDiff", M.find_bug_in_diff, { nargs = 0, range = false })
   create_command("AICommitMessage", M.commit_message, { nargs = 0, range = false })
-  create_command("AIProject", M.project, { range = false })
-  create_command("AIAskProject", M.project, { range = false })
+  create_command("AISearchProject", M.search_project, { range = false })
   create_command("AICmd", M.cmd, { range = false })
   create_command("AIShell", M.shell, { range = false })
   create_command("AIGit", M.git_cmd, { range = false })
