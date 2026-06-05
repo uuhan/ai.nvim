@@ -386,7 +386,7 @@ local function harness_prompt()
 
   local lines = {
     "AIChat has access to Neovim harness tools.",
-    "Use tools when editor, project, git, diagnostics, quickfix, or preview context is needed.",
+    "Use tools when editor, project, git, diagnostics, quickfix, symbol, reference, or preview context is needed.",
     "After receiving a tool result, either call another tool or answer the user normally.",
     "Stop calling tools once you have enough context to answer the user's request.",
     "Call at most one tool per assistant message.",

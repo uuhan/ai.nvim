@@ -16,6 +16,8 @@ local severity_names = {
   [vim.diagnostic.severity.HINT] = "HINT",
 }
 
+local symbol_kind_names = vim.lsp and vim.lsp.protocol and vim.lsp.protocol.SymbolKind or {}
+
 local function register(spec)
   registry[spec.name] = spec
   table.insert(order, spec)
@@ -213,7 +215,7 @@ local function project_path(path)
     return nil, "path is required"
   end
 
-  local root = vim.fn.fnamemodify(context.root(0), ":p"):gsub("/$", "")
+  local root = vim.fn.fnamemodify(target_root(), ":p"):gsub("/$", "")
   root = vim.fs.normalize(root)
   local expanded = vim.fn.expand(path)
   local resolved = expanded
@@ -235,6 +237,354 @@ local function json_encode(value)
     return encoded
   end
   return vim.inspect(value)
+end
+
+local function buffer_uri(bufnr)
+  if vim.uri_from_bufnr then
+    return vim.uri_from_bufnr(bufnr)
+  end
+  local name = vim.api.nvim_buf_get_name(bufnr)
+  return vim.uri_from_fname(name)
+end
+
+local function range_info(range)
+  if type(range) ~= "table" or type(range.start) ~= "table" or type(range["end"]) ~= "table" then
+    return nil
+  end
+  return {
+    start_line = (range.start.line or 0) + 1,
+    start_col = (range.start.character or 0) + 1,
+    end_line = (range["end"].line or range.start.line or 0) + 1,
+    end_col = (range["end"].character or range.start.character or 0) + 1,
+  }
+end
+
+local function path_from_uri(uri)
+  if type(uri) ~= "string" or uri == "" then
+    return ""
+  end
+  local ok, path = pcall(vim.uri_to_fname, uri)
+  if ok then
+    return path
+  end
+  return uri
+end
+
+local function line_slice(lines, line, context_lines)
+  if vim.tbl_isempty(lines) then
+    return 1, 1, {}
+  end
+  line = math.max(1, math.min(tonumber(line) or 1, #lines))
+  context_lines = math.max(0, tonumber(context_lines) or 3)
+  local start_line = math.max(1, line - context_lines)
+  local end_line = math.min(#lines, line + context_lines)
+  return start_line, end_line, vim.list_slice(lines, start_line, end_line)
+end
+
+local function snippet_for_path(path, line, context_lines, max_chars)
+  if type(path) ~= "string" or path == "" then
+    return nil
+  end
+
+  local lines
+  local bufnr = vim.fn.bufnr(path)
+  if bufnr ~= -1 and vim.api.nvim_buf_is_loaded(bufnr) then
+    lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  elseif vim.fn.filereadable(path) == 1 then
+    local ok, file_lines = pcall(vim.fn.readfile, path)
+    if ok then
+      lines = file_lines
+    end
+  end
+
+  if not lines then
+    return nil
+  end
+
+  local start_line, end_line, selected = line_slice(lines, line, context_lines)
+  local text, truncated = limit_text(join_lines(selected), max_chars or 4000)
+  return {
+    start_line = start_line,
+    end_line = end_line,
+    text = text,
+    truncated = truncated,
+  }
+end
+
+local function cursor_position(args, bufnr)
+  local cursor = cursor_for_buffer(bufnr)
+  local line_count = math.max(1, vim.api.nvim_buf_line_count(bufnr))
+  local line = number_arg(args, "line", cursor and cursor[1] or 1, 1, line_count)
+  local column = number_arg(args, "column", cursor and cursor[2] + 1 or 1, 1, 1000000)
+  return line, column
+end
+
+local function position_params(args, bufnr)
+  local line, column = cursor_position(args, bufnr)
+  return {
+    textDocument = { uri = buffer_uri(bufnr) },
+    position = {
+      line = line - 1,
+      character = column - 1,
+    },
+  }, line, column
+end
+
+local function range_params(args, bufnr)
+  local line, column = cursor_position(args, bufnr)
+  local line_count = math.max(1, vim.api.nvim_buf_line_count(bufnr))
+  local start_line = number_arg(args, "start_line", line, 1, line_count)
+  local end_line = number_arg(args, "end_line", start_line, start_line, line_count)
+  local start_col = number_arg(args, "start_column", column, 1, 1000000)
+  local end_col = number_arg(args, "end_column", start_col, start_col, 1000000)
+  return {
+    textDocument = { uri = buffer_uri(bufnr) },
+    range = {
+      start = { line = start_line - 1, character = start_col - 1 },
+      ["end"] = { line = end_line - 1, character = end_col - 1 },
+    },
+  }, start_line, start_col, end_line, end_col
+end
+
+local function language_clients(bufnr, method)
+  if not vim.lsp or type(vim.lsp.buf_request_all) ~= "function" then
+    return {}
+  end
+
+  local get_clients = vim.lsp.get_clients or vim.lsp.get_active_clients
+  if type(get_clients) ~= "function" then
+    return {}
+  end
+
+  local ok, clients = pcall(get_clients, { bufnr = bufnr })
+  if not ok or type(clients) ~= "table" then
+    return {}
+  end
+
+  local supported = {}
+  for _, client in ipairs(clients) do
+    if type(client.supports_method) ~= "function" then
+      table.insert(supported, client)
+    else
+      local supported_ok, has_method = pcall(function()
+        return client:supports_method(method, { bufnr = bufnr })
+      end)
+      if supported_ok and has_method then
+        table.insert(supported, client)
+      end
+    end
+  end
+  return supported
+end
+
+local function language_unavailable(bufnr)
+  return {
+    available = false,
+    bufnr = bufnr,
+    path = vim.api.nvim_buf_get_name(bufnr),
+    filetype = option(bufnr, "filetype", ""),
+    message = "No language intelligence is available for the target buffer.",
+  }
+end
+
+local function language_request(bufnr, method, params, cb, mapper)
+  if vim.tbl_isempty(language_clients(bufnr, method)) then
+    cb(nil, language_unavailable(bufnr))
+    return
+  end
+
+  local done = false
+  local function finish(err, result)
+    if done then
+      return
+    end
+    done = true
+    cb(err, result)
+  end
+
+  vim.defer_fn(function()
+    finish(nil, {
+      available = false,
+      bufnr = bufnr,
+      path = vim.api.nvim_buf_get_name(bufnr),
+      filetype = option(bufnr, "filetype", ""),
+      message = "Language intelligence request timed out.",
+    })
+  end, 5000)
+
+  local ok, request_err = pcall(vim.lsp.buf_request_all, bufnr, method, params, function(responses)
+    local mapper_ok, result = pcall(mapper, responses or {})
+    if not mapper_ok then
+      finish(result)
+      return
+    end
+    finish(nil, result)
+  end)
+
+  if not ok then
+    finish("Language intelligence request failed: " .. tostring(request_err))
+  end
+end
+
+local function markdown_from_language_contents(contents)
+  local lines = {}
+  if vim.lsp and vim.lsp.util and type(vim.lsp.util.convert_input_to_markdown_lines) == "function" then
+    local ok, converted = pcall(vim.lsp.util.convert_input_to_markdown_lines, contents)
+    if ok and type(converted) == "table" then
+      lines = converted
+    end
+  end
+
+  if vim.tbl_isempty(lines) then
+    if type(contents) == "string" then
+      lines = split_lines(contents)
+    elseif type(contents) == "table" and type(contents.value) == "string" then
+      lines = split_lines(contents.value)
+    elseif type(contents) == "table" then
+      for _, item in ipairs(contents) do
+        if type(item) == "string" then
+          vim.list_extend(lines, split_lines(item))
+        elseif type(item) == "table" and type(item.value) == "string" then
+          vim.list_extend(lines, split_lines(item.value))
+        end
+      end
+    end
+  end
+
+  local compact = {}
+  for _, line in ipairs(lines) do
+    if line ~= "" or not vim.tbl_isempty(compact) then
+      table.insert(compact, line)
+    end
+  end
+  while #compact > 0 and compact[#compact] == "" do
+    table.remove(compact, #compact)
+  end
+  return join_lines(compact)
+end
+
+local function language_errors(responses)
+  local errors = {}
+  for _, response in pairs(responses) do
+    if response.err then
+      table.insert(errors, tostring(response.err.message or response.err))
+    end
+  end
+  return errors
+end
+
+local function location_item(location, opts)
+  opts = opts or {}
+  local uri = location.uri or location.targetUri
+  local range = location.range or location.targetSelectionRange or location.targetRange
+  if not uri or not range then
+    return nil
+  end
+
+  local path = path_from_uri(uri)
+  local position = range_info(range)
+  if not position then
+    return nil
+  end
+
+  local item = {
+    path = path,
+    uri = uri,
+    lnum = position.start_line,
+    col = position.start_col,
+    end_lnum = position.end_line,
+    end_col = position.end_col,
+  }
+  if opts.include_snippet ~= false then
+    item.snippet = snippet_for_path(path, item.lnum, opts.context_lines, opts.max_chars)
+  end
+  return item
+end
+
+local function collect_location_items(responses, opts)
+  local items = {}
+  local total = 0
+  for _, response in pairs(responses) do
+    local result = response.result
+    if type(result) == "table" then
+      if result.uri or result.targetUri then
+        result = { result }
+      end
+      for _, location in ipairs(result) do
+        local item = location_item(location, opts)
+        if item then
+          total = total + 1
+          if #items < opts.max_items then
+            table.insert(items, item)
+          end
+        end
+      end
+    end
+  end
+  return items, total
+end
+
+local function symbol_kind_name(kind)
+  return symbol_kind_names[kind] or tostring(kind or "")
+end
+
+local function symbol_item(symbol, fallback_uri, depth)
+  local location = symbol.location or {}
+  local uri = location.uri or fallback_uri
+  local range = symbol.selectionRange or symbol.range or location.range
+  local position = range_info(range)
+  return {
+    name = symbol.name or "",
+    detail = symbol.detail,
+    kind = symbol_kind_name(symbol.kind),
+    container = symbol.containerName,
+    path = path_from_uri(uri),
+    lnum = position and position.start_line or nil,
+    col = position and position.start_col or nil,
+    end_lnum = position and position.end_line or nil,
+    end_col = position and position.end_col or nil,
+    depth = depth or 0,
+  }
+end
+
+local function flatten_symbols(symbols, fallback_uri, items, max_items, depth)
+  for _, symbol in ipairs(symbols or {}) do
+    if #items >= max_items then
+      return
+    end
+    table.insert(items, symbol_item(symbol, fallback_uri, depth))
+    if type(symbol.children) == "table" then
+      flatten_symbols(symbol.children, fallback_uri, items, max_items, (depth or 0) + 1)
+    end
+  end
+end
+
+local function count_symbols(symbols)
+  local count = 0
+  for _, symbol in ipairs(symbols or {}) do
+    count = count + 1
+    if type(symbol.children) == "table" then
+      count = count + count_symbols(symbol.children)
+    end
+  end
+  return count
+end
+
+local function code_action_item(action, index)
+  local command = action.command
+  if type(command) == "table" then
+    command = command.title or command.command
+  end
+
+  return {
+    index = index,
+    title = action.title or command or "",
+    kind = action.kind,
+    preferred = action.isPreferred or nil,
+    disabled = action.disabled and action.disabled.reason or nil,
+    has_edit = action.edit ~= nil,
+    command = type(command) == "string" and command or nil,
+  }
 end
 
 local function preview_buffer_replace(args)
@@ -301,7 +651,7 @@ end
 register({
   name = "nvim_editor_state",
   mode = "read",
-  description = "Return the current Neovim mode, cwd, project root, current buffer, and visible windows.",
+  description = "Return editor state, including actual focused buffer, target editor buffer, project root, and visible windows.",
   input_schema = {
     type = "object",
     properties = {},
@@ -341,7 +691,7 @@ register({
 register({
   name = "nvim_current_buffer",
   mode = "read",
-  description = "Return metadata for the current buffer, including path, filetype, cursor, modified flag, and line count.",
+  description = "Return metadata for the target editor buffer, including path, filetype, cursor, modified flag, and line count.",
   input_schema = {
     type = "object",
     properties = {},
@@ -404,7 +754,7 @@ register({
   input_schema = {
     type = "object",
     properties = {
-      bufnr = { type = "integer", description = "Buffer number. Defaults to the current buffer." },
+      bufnr = { type = "integer", description = "Buffer number. Defaults to the target editor buffer." },
       start_line = { type = "integer", description = "1-based inclusive start line. Defaults to 1." },
       end_line = { type = "integer", description = "1-based inclusive end line. Defaults to the last line." },
       max_chars = { type = "integer", description = "Maximum returned text length. Defaults to project.max_context_chars." },
@@ -439,7 +789,7 @@ register({
 register({
   name = "nvim_current_selection",
   mode = "read",
-  description = "Read the last visual selection marks from the current buffer when they are available.",
+  description = "Read the last visual selection marks from the target editor buffer when they are available.",
   input_schema = {
     type = "object",
     properties = {
@@ -517,9 +867,329 @@ register({
 })
 
 register({
+  name = "nvim_symbol_hover",
+  mode = "read",
+  description = "Return language-aware documentation for the symbol at a target buffer position.",
+  input_schema = {
+    type = "object",
+    properties = {
+      bufnr = { type = "integer", description = "Buffer number. Defaults to the target editor buffer." },
+      line = { type = "integer", description = "1-based line. Defaults to the target cursor line." },
+      column = { type = "integer", description = "1-based column. Defaults to the target cursor column." },
+      max_chars = { type = "integer", description = "Maximum returned text length. Defaults to project.max_context_chars." },
+    },
+    additionalProperties = false,
+  },
+  run = function(args, cb)
+    local bufnr, err = valid_loaded_buffer(args.bufnr)
+    if not bufnr then
+      cb(err)
+      return
+    end
+
+    local params, line, column = position_params(args, bufnr)
+    language_request(bufnr, "textDocument/hover", params, cb, function(responses)
+      local parts = {}
+      for _, response in pairs(responses) do
+        local result = response.result
+        if type(result) == "table" and result.contents then
+          local text = markdown_from_language_contents(result.contents)
+          if text ~= "" then
+            table.insert(parts, text)
+          end
+        end
+      end
+
+      local text, truncated = limit_text(table.concat(parts, "\n\n"), args.max_chars)
+      return {
+        available = true,
+        bufnr = bufnr,
+        path = vim.api.nvim_buf_get_name(bufnr),
+        filetype = option(bufnr, "filetype", ""),
+        line = line,
+        column = column,
+        text = text,
+        truncated = truncated,
+        errors = language_errors(responses),
+      }
+    end)
+  end,
+})
+
+register({
+  name = "nvim_symbol_definition",
+  mode = "read",
+  description = "Find definitions for the symbol at a target buffer position and return locations with nearby code.",
+  input_schema = {
+    type = "object",
+    properties = {
+      bufnr = { type = "integer", description = "Buffer number. Defaults to the target editor buffer." },
+      line = { type = "integer", description = "1-based line. Defaults to the target cursor line." },
+      column = { type = "integer", description = "1-based column. Defaults to the target cursor column." },
+      max_items = { type = "integer", description = "Maximum locations to return. Defaults to 20." },
+      context_lines = { type = "integer", description = "Nearby lines to include around each location. Defaults to 3." },
+      max_chars = { type = "integer", description = "Maximum snippet length per location. Defaults to 4000." },
+    },
+    additionalProperties = false,
+  },
+  run = function(args, cb)
+    local bufnr, err = valid_loaded_buffer(args.bufnr)
+    if not bufnr then
+      cb(err)
+      return
+    end
+
+    local max_items = number_arg(args, "max_items", 20, 1, 200)
+    local params, line, column = position_params(args, bufnr)
+    language_request(bufnr, "textDocument/definition", params, cb, function(responses)
+      local items, total = collect_location_items(responses, {
+        max_items = max_items,
+        context_lines = number_arg(args, "context_lines", 3, 0, 20),
+        max_chars = args.max_chars,
+      })
+      return {
+        available = true,
+        bufnr = bufnr,
+        path = vim.api.nvim_buf_get_name(bufnr),
+        line = line,
+        column = column,
+        items = items,
+        total = total,
+        truncated = total > #items,
+        errors = language_errors(responses),
+      }
+    end)
+  end,
+})
+
+register({
+  name = "nvim_symbol_references",
+  mode = "read",
+  description = "Find references for the symbol at a target buffer position and return locations with nearby code.",
+  input_schema = {
+    type = "object",
+    properties = {
+      bufnr = { type = "integer", description = "Buffer number. Defaults to the target editor buffer." },
+      line = { type = "integer", description = "1-based line. Defaults to the target cursor line." },
+      column = { type = "integer", description = "1-based column. Defaults to the target cursor column." },
+      include_declaration = { type = "boolean", description = "Include the declaration location. Defaults to true." },
+      max_items = { type = "integer", description = "Maximum locations to return. Defaults to 80." },
+      context_lines = { type = "integer", description = "Nearby lines to include around each location. Defaults to 2." },
+      max_chars = { type = "integer", description = "Maximum snippet length per location. Defaults to 4000." },
+    },
+    additionalProperties = false,
+  },
+  run = function(args, cb)
+    local bufnr, err = valid_loaded_buffer(args.bufnr)
+    if not bufnr then
+      cb(err)
+      return
+    end
+
+    local max_items = number_arg(args, "max_items", 80, 1, 500)
+    local params, line, column = position_params(args, bufnr)
+    params.context = { includeDeclaration = bool_arg(args, "include_declaration", true) }
+    language_request(bufnr, "textDocument/references", params, cb, function(responses)
+      local items, total = collect_location_items(responses, {
+        max_items = max_items,
+        context_lines = number_arg(args, "context_lines", 2, 0, 20),
+        max_chars = args.max_chars,
+      })
+      return {
+        available = true,
+        bufnr = bufnr,
+        path = vim.api.nvim_buf_get_name(bufnr),
+        line = line,
+        column = column,
+        items = items,
+        total = total,
+        truncated = total > #items,
+        errors = language_errors(responses),
+      }
+    end)
+  end,
+})
+
+register({
+  name = "nvim_document_symbols",
+  mode = "read",
+  description = "Return the symbol outline for the target buffer.",
+  input_schema = {
+    type = "object",
+    properties = {
+      bufnr = { type = "integer", description = "Buffer number. Defaults to the target editor buffer." },
+      max_items = { type = "integer", description = "Maximum symbols to return. Defaults to 200." },
+    },
+    additionalProperties = false,
+  },
+  run = function(args, cb)
+    local bufnr, err = valid_loaded_buffer(args.bufnr)
+    if not bufnr then
+      cb(err)
+      return
+    end
+
+    local uri = buffer_uri(bufnr)
+    local max_items = number_arg(args, "max_items", 200, 1, 2000)
+    language_request(bufnr, "textDocument/documentSymbol", { textDocument = { uri = uri } }, cb, function(responses)
+      local items = {}
+      local total = 0
+      for _, response in pairs(responses) do
+        local result = response.result
+        if type(result) == "table" then
+          total = total + count_symbols(result)
+          flatten_symbols(result, uri, items, max_items, 0)
+        end
+      end
+      return {
+        available = true,
+        bufnr = bufnr,
+        path = vim.api.nvim_buf_get_name(bufnr),
+        items = items,
+        total = total,
+        truncated = #items >= max_items,
+        errors = language_errors(responses),
+      }
+    end)
+  end,
+})
+
+register({
+  name = "nvim_workspace_symbols",
+  mode = "read",
+  description = "Search language-aware workspace symbols by query.",
+  input_schema = {
+    type = "object",
+    required = { "query" },
+    properties = {
+      query = { type = "string", description = "Symbol search query." },
+      bufnr = { type = "integer", description = "Buffer number used to choose the project context. Defaults to the target editor buffer." },
+      max_items = { type = "integer", description = "Maximum symbols to return. Defaults to 80." },
+    },
+    additionalProperties = false,
+  },
+  run = function(args, cb)
+    local query = string_arg(args, "query", "")
+    if query == "" then
+      cb("query is required")
+      return
+    end
+
+    local bufnr, err = valid_loaded_buffer(args.bufnr)
+    if not bufnr then
+      cb(err)
+      return
+    end
+
+    local max_items = number_arg(args, "max_items", 80, 1, 500)
+    language_request(bufnr, "workspace/symbol", { query = query }, cb, function(responses)
+      local items = {}
+      local total = 0
+      for _, response in pairs(responses) do
+        local result = response.result
+        if type(result) == "table" then
+          for _, symbol in ipairs(result) do
+            total = total + 1
+            if #items < max_items then
+              table.insert(items, symbol_item(symbol, symbol.location and symbol.location.uri or symbol.uri, 0))
+            end
+          end
+        end
+      end
+      return {
+        available = true,
+        bufnr = bufnr,
+        query = query,
+        items = items,
+        total = total,
+        truncated = total > #items,
+        errors = language_errors(responses),
+      }
+    end)
+  end,
+})
+
+register({
+  name = "nvim_code_actions",
+  mode = "read",
+  description = "List code actions available for a target buffer range. This only reports actions; it does not apply them.",
+  input_schema = {
+    type = "object",
+    properties = {
+      bufnr = { type = "integer", description = "Buffer number. Defaults to the target editor buffer." },
+      line = { type = "integer", description = "1-based cursor line used when start_line is not provided." },
+      column = { type = "integer", description = "1-based cursor column used when start_column is not provided." },
+      start_line = { type = "integer", description = "1-based start line. Defaults to cursor line." },
+      start_column = { type = "integer", description = "1-based start column. Defaults to cursor column." },
+      end_line = { type = "integer", description = "1-based end line. Defaults to start_line." },
+      end_column = { type = "integer", description = "1-based end column. Defaults to start_column." },
+      only = { type = "array", items = { type = "string" }, description = "Optional action categories to include." },
+      max_items = { type = "integer", description = "Maximum actions to return. Defaults to 40." },
+    },
+    additionalProperties = false,
+  },
+  run = function(args, cb)
+    local bufnr, err = valid_loaded_buffer(args.bufnr)
+    if not bufnr then
+      cb(err)
+      return
+    end
+
+    local params, start_line, start_col, end_line, end_col = range_params(args, bufnr)
+    local diagnostics = {}
+    local diagnostic_from = vim.lsp and vim.lsp.diagnostic and vim.lsp.diagnostic.from
+    if type(diagnostic_from) == "function" then
+      for _, diagnostic in ipairs(vim.diagnostic.get(bufnr, { lnum = start_line - 1 })) do
+        local ok, converted = pcall(diagnostic_from, diagnostic)
+        if ok and converted then
+          table.insert(diagnostics, converted)
+        end
+      end
+    end
+    params.context = {
+      diagnostics = diagnostics,
+      only = type(args.only) == "table" and args.only or nil,
+    }
+
+    local max_items = number_arg(args, "max_items", 40, 1, 200)
+    language_request(bufnr, "textDocument/codeAction", params, cb, function(responses)
+      local items = {}
+      local total = 0
+      for _, response in pairs(responses) do
+        local result = response.result
+        if type(result) == "table" then
+          for _, action in ipairs(result) do
+            total = total + 1
+            if #items < max_items then
+              table.insert(items, code_action_item(action, total))
+            end
+          end
+        end
+      end
+      return {
+        available = true,
+        bufnr = bufnr,
+        path = vim.api.nvim_buf_get_name(bufnr),
+        range = {
+          start_line = start_line,
+          start_col = start_col,
+          end_line = end_line,
+          end_col = end_col,
+        },
+        items = items,
+        total = total,
+        truncated = total > #items,
+        message = "These actions were not applied.",
+        errors = language_errors(responses),
+      }
+    end)
+  end,
+})
+
+register({
   name = "nvim_diagnostics",
   mode = "read",
-  description = "Return Neovim diagnostics from the current buffer or all loaded buffers.",
+  description = "Return diagnostics from the target editor buffer or all loaded buffers.",
   input_schema = {
     type = "object",
     properties = {
@@ -541,8 +1211,7 @@ register({
     else
       local bufnr, err = valid_loaded_buffer(args.bufnr)
       if not bufnr then
-        cb(err)
-        return
+        return nil, err
       end
       buffers = { bufnr }
     end
@@ -768,7 +1437,7 @@ register({
     type = "object",
     required = { "start_line", "end_line", "replacement" },
     properties = {
-      bufnr = { type = "integer", description = "Buffer number. Defaults to the current buffer." },
+      bufnr = { type = "integer", description = "Buffer number. Defaults to the target editor buffer." },
       start_line = { type = "integer", description = "1-based inclusive start line to replace." },
       end_line = { type = "integer", description = "1-based inclusive end line to replace." },
       replacement = { type = "string", description = "Replacement text for the selected range. May be empty to delete the range." },

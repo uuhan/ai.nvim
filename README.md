@@ -10,7 +10,7 @@ A small Neovim AI assistant built around editor operations:
 
 - run prompts on a visual selection, paragraph, buffer, file, git diff, or project search context
 - preview AI edits as a unified diff before applying them
-- use LSP diagnostics, quickfix entries, git diff, and project rules as request context
+- use diagnostics, symbol lookup, references, quickfix entries, git diff, and project rules as request context
 - talk to OpenAI-compatible `/v1/chat/completions` endpoints through a pluggable provider transport (`curl` by default)
 
 This is intentionally not just a chat panel. The useful path is:
@@ -185,8 +185,9 @@ codex.md
   AI response and place them in the location list when possible.
 - `:AITools` exposes bounded Neovim context tools for the coding harness:
   editor state, buffers, files, selection, diagnostics, quickfix/location lists,
-  git diff, project files/search, patch/command preview, and buffer/file range
-  replacement previews.
+  symbol hover/definition/references, document/workspace symbols, code action
+  listing, git diff, project files/search, patch/command preview, and
+  buffer/file range replacement previews.
 - Command execution has a small safety blocklist by default. Set
   `safety.allow_dangerous_commands = true` only if you want `:AIRun` to skip it.
 - Set `provider.stream = true` to stream normal answers and AIChat text.
@@ -239,6 +240,9 @@ sent back to the model is compressed separately by `chat.max_tool_model_chars`.
 When the chat input has focus, buffer-oriented tools still default to the last
 real editor buffer rather than `ai://chat-input`; `nvim_editor_state` reports
 both the actual focused buffer and the target editor buffer.
+Language-aware tools serve code understanding directly: they expose hover text,
+definitions, references, symbols, and code action titles without asking the
+model to reason about language service internals.
 
 Chat tool loop settings:
 

@@ -69,6 +69,8 @@ end
 vim.cmd("new")
 vim.api.nvim_buf_set_lines(0, 0, -1, false, { "local x = 1", "print(x)" })
 local tool_buf = vim.api.nvim_get_current_buf()
+local tool_path = vim.fn.tempname() .. ".lua"
+vim.api.nvim_buf_set_name(tool_buf, tool_path)
 
 local tools = require("ai.tools")
 local client = require("ai.client")
@@ -317,6 +319,132 @@ assert(buffers.total >= 1, "list buffers tool returned no buffers")
 
 local diagnostics = run_tool("nvim_diagnostics", { scope = "all" })
 assert(type(diagnostics.items) == "table", "diagnostics tool did not return items")
+
+local unavailable_language_tools = {
+  { "nvim_symbol_hover", {} },
+  { "nvim_symbol_definition", {} },
+  { "nvim_symbol_references", {} },
+  { "nvim_document_symbols", {} },
+  { "nvim_workspace_symbols", { query = "x" } },
+  { "nvim_code_actions", {} },
+}
+for _, item in ipairs(unavailable_language_tools) do
+  local result = run_tool(item[1], item[2])
+  assert(result.available == false, item[1] .. " should report unavailable without language intelligence")
+  assert(result.message:match("language intelligence"), item[1] .. " returned the wrong unavailable message")
+end
+assert(not vim.tbl_contains(tools.names(), "nvim_lsp_clients"), "tool registry should not expose language service internals")
+
+local original_get_clients = vim.lsp.get_clients
+local original_buf_request_all = vim.lsp.buf_request_all
+local fake_uri = vim.uri_from_bufnr(tool_buf)
+vim.lsp.get_clients = function()
+  return {
+    {
+      id = 9001,
+      stop = function() end,
+      supports_method = function(_, method)
+        return ({
+          ["textDocument/hover"] = true,
+          ["textDocument/definition"] = true,
+          ["textDocument/references"] = true,
+          ["textDocument/documentSymbol"] = true,
+          ["workspace/symbol"] = true,
+          ["textDocument/codeAction"] = true,
+        })[method] == true
+      end,
+    },
+  }
+end
+vim.lsp.buf_request_all = function(_, method, _, cb)
+  local result_by_method = {
+    ["textDocument/hover"] = {
+      contents = {
+        kind = "markdown",
+        value = "hover docs",
+      },
+    },
+    ["textDocument/definition"] = {
+      uri = fake_uri,
+      range = {
+        start = { line = 0, character = 0 },
+        ["end"] = { line = 0, character = 5 },
+      },
+    },
+    ["textDocument/references"] = {
+      {
+        uri = fake_uri,
+        range = {
+          start = { line = 1, character = 0 },
+          ["end"] = { line = 1, character = 5 },
+        },
+      },
+    },
+    ["textDocument/documentSymbol"] = {
+      {
+        name = "outer",
+        kind = vim.lsp.protocol.SymbolKind.Function,
+        range = {
+          start = { line = 0, character = 0 },
+          ["end"] = { line = 1, character = 8 },
+        },
+        selectionRange = {
+          start = { line = 0, character = 0 },
+          ["end"] = { line = 0, character = 5 },
+        },
+        children = {
+          {
+            name = "inner",
+            kind = vim.lsp.protocol.SymbolKind.Variable,
+            range = {
+              start = { line = 0, character = 6 },
+              ["end"] = { line = 0, character = 7 },
+            },
+            selectionRange = {
+              start = { line = 0, character = 6 },
+              ["end"] = { line = 0, character = 7 },
+            },
+          },
+        },
+      },
+    },
+    ["workspace/symbol"] = {
+      {
+        name = "outer",
+        kind = vim.lsp.protocol.SymbolKind.Function,
+        location = {
+          uri = fake_uri,
+          range = {
+            start = { line = 0, character = 0 },
+            ["end"] = { line = 0, character = 5 },
+          },
+        },
+      },
+    },
+    ["textDocument/codeAction"] = {
+      {
+        title = "Fix sample",
+        kind = "quickfix",
+      },
+    },
+  }
+  cb({ [1] = { result = result_by_method[method] } })
+end
+
+local hover = run_tool("nvim_symbol_hover")
+assert(hover.available == true and hover.text:match("hover docs"), "symbol hover did not return fake hover text")
+local definition = run_tool("nvim_symbol_definition")
+assert(definition.available == true and definition.items[1].snippet.text:match("local x = 1"), "symbol definition did not return snippet")
+local references = run_tool("nvim_symbol_references")
+assert(references.available == true and references.items[1].lnum == 2, "symbol references did not return location")
+local document_symbols = run_tool("nvim_document_symbols")
+assert(document_symbols.available == true and document_symbols.items[2].name == "inner", "document symbols did not flatten children")
+local workspace_symbols = run_tool("nvim_workspace_symbols", { query = "outer" })
+assert(workspace_symbols.available == true and workspace_symbols.items[1].name == "outer", "workspace symbols did not return item")
+local code_actions = run_tool("nvim_code_actions")
+assert(code_actions.available == true and code_actions.items[1].title == "Fix sample", "code actions did not return action title")
+vim.lsp.get_clients = original_get_clients
+vim.lsp.buf_request_all = original_buf_request_all
 
 local quickfix = run_tool("nvim_quickfix")
 assert(type(quickfix.items) == "table", "quickfix tool did not return items")
