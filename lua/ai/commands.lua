@@ -5,6 +5,7 @@ local config = require("ai.config")
 local context = require("ai.context")
 local locations = require("ai.locations")
 local popup = require("ai.popup")
+local stream_buffer = require("ai.stream_buffer")
 local tools = require("ai.tools")
 local ui = require("ai.ui")
 
@@ -109,19 +110,27 @@ local function request_output(title, req_messages, opts, bufnr, on_success)
   end
 
   if use_stream then
-    local text = ""
-    client.chat_stream(req_messages, req_opts, {
-      on_delta = function(delta)
-        text = text .. delta
+    local renderer
+    renderer = stream_buffer.new({
+      on_update = function(text)
         set_response_output(bufnr, title, text, opts)
       end,
-      on_error = function(err)
-        set_response_output(bufnr, title .. "-error", err, opts)
-      end,
-      on_done = function()
+      on_done = function(text)
         if on_success then
           on_success(text, bufnr)
         end
+      end,
+    })
+    client.chat_stream(req_messages, req_opts, {
+      on_delta = function(delta)
+        renderer.push(delta)
+      end,
+      on_error = function(err)
+        renderer.cancel()
+        set_response_output(bufnr, title .. "-error", err, opts)
+      end,
+      on_done = function()
+        renderer.finish()
       end,
     })
     return

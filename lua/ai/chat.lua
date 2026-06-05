@@ -1,5 +1,6 @@
 local client = require("ai.client")
 local config = require("ai.config")
+local stream_buffer = require("ai.stream_buffer")
 local target = require("ai.target")
 local tools = require("ai.tools")
 
@@ -12,6 +13,7 @@ local M = {
   layout = nil,
   active = false,
   active_request = nil,
+  active_stream = nil,
   request_id = 0,
   status = "idle",
   status_detail = "",
@@ -855,6 +857,10 @@ function M.stop()
   end
 
   M.request_id = M.request_id + 1
+  if M.active_stream and type(M.active_stream.cancel) == "function" then
+    pcall(M.active_stream.cancel)
+  end
+  M.active_stream = nil
   if M.active_request and type(M.active_request.kill) == "function" then
     pcall(function()
       M.active_request:kill(15)
@@ -875,6 +881,7 @@ function M.send(text)
   local request_id = M.request_id
   M.active = true
   M.active_request = nil
+  M.active_stream = nil
   table.insert(M.history, { role = "user", content = text })
   reset_input()
   set_status("thinking", "waiting for model", "## Assistant\n\n...")
@@ -891,6 +898,7 @@ function M.send(text)
         return
       end
       M.active_request = nil
+      M.active_stream = nil
       M.active = false
       set_status(status or "idle", detail, extra)
     end
@@ -995,13 +1003,42 @@ function M.send(text)
         local assistant = ""
         local reasoning_content = ""
         local stream_calls = {}
-        M.active_request = client.chat_stream(request_messages(), opts, {
-          on_delta = function(delta)
+        local renderer
+        local function clear_renderer()
+          if M.active_stream == renderer then
+            M.active_stream = nil
+          end
+        end
+        renderer = stream_buffer.new({
+          on_update = function(text)
             if stale() then
+              renderer.cancel()
+              clear_renderer()
               return
             end
-            assistant = assistant .. delta
+            assistant = text
             set_status("streaming", "receiving response", "## Assistant\n\n" .. assistant)
+          end,
+          on_done = function(text)
+            if stale() then
+              clear_renderer()
+              return
+            end
+            assistant = text
+            clear_renderer()
+            M.active_request = nil
+            handle_response(tool_rounds, assistant, stream_tool_call_message(stream_calls, reasoning_content ~= "" and reasoning_content or nil))
+          end,
+        })
+        M.active_stream = renderer
+        local request_handle = client.chat_stream(request_messages(), opts, {
+          on_delta = function(delta)
+            if stale() then
+              renderer.cancel()
+              clear_renderer()
+              return
+            end
+            renderer.push(delta)
           end,
           on_reasoning_delta = function(delta)
             if stale() then
@@ -1014,21 +1051,27 @@ function M.send(text)
               return
             end
             append_stream_tool_call_delta(stream_calls, deltas)
-            if assistant == "" then
+            if assistant == "" and not renderer.has_pending() then
               set_status("streaming", "receiving tool call", "## Assistant\n\n...")
             end
           end,
           on_error = function(err)
+            renderer.cancel()
+            clear_renderer()
             finish("error", "stream failed", "## Error\n\n" .. err)
           end,
           on_done = function()
             if stale() then
+              renderer.cancel()
+              clear_renderer()
               return
             end
-            M.active_request = nil
-            handle_response(tool_rounds, assistant, stream_tool_call_message(stream_calls, reasoning_content ~= "" and reasoning_content or nil))
+            renderer.finish()
           end,
         })
+        if not stale() and M.active and M.active_stream == renderer then
+          M.active_request = request_handle
+        end
         return
       end
 
@@ -1054,32 +1097,72 @@ function M.send(text)
 
   if config.get().provider.stream then
     local assistant = ""
-    M.active_request = client.chat_stream(request_messages(), {}, {
-      on_delta = function(delta)
-        if request_id ~= M.request_id then
+    local renderer
+    local function stale()
+      return request_id ~= M.request_id
+    end
+    local function clear_renderer()
+      if M.active_stream == renderer then
+        M.active_stream = nil
+      end
+    end
+    renderer = stream_buffer.new({
+      on_update = function(text)
+        if stale() then
+          renderer.cancel()
+          clear_renderer()
           return
         end
-        assistant = assistant .. delta
+        assistant = text
         set_status("streaming", "receiving response", "## Assistant\n\n" .. assistant)
       end,
-      on_error = function(err)
-        if request_id ~= M.request_id then
+      on_done = function(text)
+        if stale() then
+          clear_renderer()
           return
         end
-        M.active_request = nil
-        M.active = false
-        set_status("error", "stream failed", "## Error\n\n" .. err)
-      end,
-      on_done = function()
-        if request_id ~= M.request_id then
-          return
-        end
+        assistant = text
+        clear_renderer()
         M.active_request = nil
         M.active = false
         table.insert(M.history, { role = "assistant", content = assistant })
         set_status("idle")
       end,
     })
+    M.active_stream = renderer
+    local request_handle = client.chat_stream(request_messages(), {}, {
+      on_delta = function(delta)
+        if stale() then
+          renderer.cancel()
+          clear_renderer()
+          return
+        end
+        renderer.push(delta)
+      end,
+      on_error = function(err)
+        if stale() then
+          renderer.cancel()
+          clear_renderer()
+          return
+        end
+        renderer.cancel()
+        clear_renderer()
+        M.active_request = nil
+        M.active = false
+        set_status("error", "stream failed", "## Error\n\n" .. err)
+      end,
+      on_done = function()
+        if stale() then
+          renderer.cancel()
+          clear_renderer()
+          return
+        end
+        renderer.finish()
+      end,
+    })
+    if not stale() and M.active and M.active_stream == renderer then
+      M.active_request = request_handle
+    end
     return
   end
 

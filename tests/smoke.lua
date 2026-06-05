@@ -75,6 +75,7 @@ vim.api.nvim_buf_set_name(tool_buf, tool_path)
 local tools = require("ai.tools")
 local client = require("ai.client")
 local config = require("ai.config")
+local stream_buffer = require("ai.stream_buffer")
 assert(#tools.list() >= 10, "tool registry is too small")
 assert(#tools.openai_tools() == #tools.list(), "OpenAI tool export size mismatch")
 local editor_state_tool = tools.openai_tools()[1]
@@ -190,6 +191,38 @@ assert(client_stream_text == "hello ", "client stream did not parse text delta")
 assert(client_reasoning_text == "thinking ", "client stream did not parse reasoning delta")
 assert(client_tool_delta and client_tool_delta[1].id == "call_client_stream", "client stream did not parse tool call delta")
 assert(client_finish_reason == "tool_calls", "client stream did not parse finish reason")
+
+config.setup({
+  provider = {
+    api_key = "",
+  },
+  streaming = {
+    interval_ms = 1,
+    max_chars_per_flush = 2,
+  },
+  chat = {
+    max_tool_model_chars = 80,
+  },
+})
+local buffered_updates = {}
+local buffered_done = false
+local buffered_text
+local renderer = stream_buffer.new({
+  on_update = function(text)
+    table.insert(buffered_updates, text)
+  end,
+  on_done = function(text)
+    buffered_text = text
+    buffered_done = true
+  end,
+})
+renderer.push("我先看。")
+renderer.finish()
+assert(vim.wait(5000, function()
+  return buffered_done
+end), "timed out waiting for stream buffer")
+assert(buffered_text == "我先看。", "stream buffer did not preserve UTF-8 text")
+assert(#buffered_updates >= 2, "stream buffer did not throttle updates")
 
 local custom_request_seen = false
 local custom_stream_seen = false
@@ -762,6 +795,10 @@ config.setup({
   provider = {
     api_key = "",
     stream = true,
+  },
+  streaming = {
+    interval_ms = 1,
+    max_chars_per_flush = 2,
   },
   chat = {
     max_tool_model_chars = 80,

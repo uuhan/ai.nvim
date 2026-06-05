@@ -71,6 +71,10 @@ return {
         thinking = os.getenv "AI_NVIM_THINKING" == "1",
         temperature = tonumber(os.getenv "AI_NVIM_TEMPERATURE" or "") or 0.2,
       },
+      streaming = {
+        interval_ms = 30,
+        max_chars_per_flush = 96,
+      },
       chat = {
         max_tool_rounds = tonumber(os.getenv "AI_NVIM_MAX_TOOL_ROUNDS" or "") or 20,
       },
@@ -197,10 +201,13 @@ codex.md
 - Command execution has a small safety blocklist by default. Set
   `safety.allow_dangerous_commands = true` only if you want `:AIRun` to skip it.
 - Set `provider.stream = true` to stream normal answers and AIChat text.
-  AIChat also supports streaming tool-call responses: text deltas are shown as
-  they arrive, while tool-call arguments are buffered until the stream finishes
-  and then dispatched. Patch and command preview requests stay non-streaming so
-  the plugin can parse the complete result before previewing them.
+  Stream text is buffered with `streaming.interval_ms` and
+  `streaming.max_chars_per_flush` so large provider chunks render with a smoother
+  typewriter-like cadence. AIChat also supports streaming tool-call responses:
+  text deltas are shown first, while tool-call arguments are buffered until the
+  stream finishes and then dispatched. Patch and command preview requests stay
+  non-streaming so the plugin can parse the complete result before previewing
+  them.
 - `provider.thinking` defaults to `false`. DeepSeek-compatible providers receive
   `thinking = { type = "disabled" }` by default; set `provider.thinking = true`
   to opt into thinking mode.

@@ -18,6 +18,10 @@ local defaults = {
     reasoning_effort = nil,
     extra_headers = {},
   },
+  streaming = {
+    interval_ms = 30,
+    max_chars_per_flush = 96,
+  },
   rules = {
     enabled = true,
     max_chars = 12000,
