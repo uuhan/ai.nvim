@@ -14,6 +14,7 @@ local commands = {
   "AI",
   "AIExplain",
   "AIFindBug",
+  "AIFixBug",
   "AIEdit",
   "AIApply",
   "AIReject",
@@ -84,6 +85,7 @@ local config = require("ai.config")
 local context = require("ai.context")
 local response_session = require("ai.response_session")
 local stream_buffer = require("ai.stream_buffer")
+local ui = require("ai.ui")
 assert(#tools.list() >= 10, "tool registry is too small")
 assert(#tools.openai_tools() == #tools.list(), "OpenAI tool export size mismatch")
 local editor_state_tool = tools.openai_tools()[1]
@@ -683,6 +685,7 @@ assert(vim.wait(5000, function()
 end), "timed out waiting for AIFindBug prompt")
 assert(find_bug_prompt:match("Look for concrete correctness bugs"), "AIFindBug used the wrong prompt")
 assert(find_bug_prompt:match("Do not report style"), "AIFindBug prompt is not strict enough")
+assert(find_bug_prompt:match(":AIFixBug"), "AIFindBug did not point to fix preview command")
 assert(find_bug_prompt:match("Diagnostics in selected range:"), "AIFindBug did not include selected diagnostics")
 assert(find_bug_prompt:match("possible nil access"), "AIFindBug did not include diagnostic message")
 assert(find_bug_prompt:match("Language context:"), "AIFindBug did not include language context")
@@ -692,6 +695,24 @@ vim.diagnostic.reset(find_bug_ns, tool_buf)
 if vim.api.nvim_win_is_valid(explain_source_winid) then
   vim.api.nvim_set_current_win(explain_source_winid)
 end
+
+vim.api.nvim_set_current_buf(tool_buf)
+vim.api.nvim_win_set_cursor(0, { 1, 6 })
+local fix_bug_prompt
+client.chat = function(messages, _, cb)
+  fix_bug_prompt = messages[2].content
+  cb(nil, "local x = 3")
+end
+request_params_by_method = {}
+vim.cmd("AIFixBug")
+assert(vim.wait(5000, function()
+  return fix_bug_prompt ~= nil
+end), "timed out waiting for AIFixBug prompt")
+assert(fix_bug_prompt:match("Fix concrete correctness bugs"), "AIFixBug used the wrong prompt")
+assert(fix_bug_prompt:match("preview the replacement"), "AIFixBug did not explain reviewable preview")
+assert(fix_bug_prompt:match("Available code actions:"), "AIFixBug did not include code actions")
+assert(ui.pending_edit and ui.pending_edit.replacement_lines[1] == "local x = 3", "AIFixBug did not create a pending edit preview")
+ui.reject_pending()
 
 vim.api.nvim_set_current_buf(tool_buf)
 local buffer_prompt
@@ -813,6 +834,7 @@ local buffer_replace_preview = run_tool("nvim_preview_buffer_replace", {
 assert(buffer_replace_preview.status == "previewed", "buffer replace tool did not preview")
 assert(buffer_replace_preview.action == "buffer_replace", "buffer replace tool returned wrong action")
 assert(buffer_replace_preview.start_line == 1 and buffer_replace_preview.end_line == 1, "buffer replace range mismatch")
+assert(ui.pending_notice():match("Pending AI edit preview"), "pending edit notice missing")
 
 local file_replace_preview = run_tool("nvim_preview_file_replace", {
   path = "README.md",
@@ -822,6 +844,42 @@ local file_replace_preview = run_tool("nvim_preview_file_replace", {
 })
 assert(file_replace_preview.status == "previewed", "file replace tool did not preview")
 assert(file_replace_preview.action == "file_replace", "file replace tool returned wrong action")
+
+config.setup({
+  provider = {
+    api_key = "",
+    stream = false,
+  },
+  safety = {
+    auto_apply_edits = true,
+  },
+  chat = {
+    max_tool_model_chars = 80,
+  },
+})
+vim.cmd("new")
+vim.api.nvim_buf_set_lines(0, 0, -1, false, { "local auto = 1" })
+local auto_apply_buf = vim.api.nvim_get_current_buf()
+local auto_apply_preview = run_tool("nvim_preview_buffer_replace", {
+  bufnr = auto_apply_buf,
+  start_line = 1,
+  end_line = 1,
+  replacement = "local auto = 2",
+})
+assert(auto_apply_preview.status == "applied", "auto apply edit preview did not apply")
+assert(ui.pending_edit == nil, "auto apply edit left a pending edit")
+assert(vim.api.nvim_buf_get_lines(auto_apply_buf, 0, 1, false)[1] == "local auto = 2", "auto apply edit did not change buffer")
+vim.api.nvim_buf_delete(auto_apply_buf, { force = true })
+config.setup({
+  system_prompt = "请使用中文回复对话。",
+  provider = {
+    api_key = "",
+    stream = false,
+  },
+  chat = {
+    max_tool_model_chars = 80,
+  },
+})
 
 vim.cmd("AITools")
 vim.cmd(('AITool nvim_read_buffer {"bufnr":%d,"start_line":1,"end_line":1}'):format(tool_buf))
@@ -880,6 +938,8 @@ client.chat = function(messages, opts, cb)
   if chat_calls == 1 then
     assert(messages[1].content:match("请使用中文回复对话。"), "AIChat did not include configured system prompt")
     assert(messages[1].content:match("Available tools"), "AIChat did not include tool registry")
+    assert(messages[1].content:match("nvim_preview_buffer_replace"), "AIChat did not expose preview edit tools")
+    assert(messages[1].content:match(":AIApply"), "AIChat did not explain preview apply flow")
     cb(nil, "我先看看当前 buffer。", nil, {
       content = "我先看看当前 buffer。",
       tool_calls = {
@@ -1106,7 +1166,6 @@ chat.close()
 local target = vim.api.nvim_create_buf(true, false)
 vim.api.nvim_buf_set_lines(target, 0, -1, false, { "local x = 1", "print(x)" })
 
-local ui = require("ai.ui")
 ui.preview_edit({
   bufnr = target,
   path = "test.lua",

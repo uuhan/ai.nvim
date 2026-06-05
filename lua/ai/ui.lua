@@ -145,6 +145,72 @@ function M.notify(message, level)
   vim.notify(message, level or vim.log.levels.INFO, { title = "ai.nvim" })
 end
 
+function M.auto_apply_edits_enabled()
+  return config.get().safety and config.get().safety.auto_apply_edits == true
+end
+
+function M.pending_action()
+  if M.pending_edit then
+    return {
+      kind = "edit",
+      title = "Pending AI edit preview",
+      apply = ":AIApply",
+      reject = ":AIReject",
+      message = "Run `:AIApply` to apply this edit or `:AIReject` to discard it.",
+    }
+  end
+
+  if M.pending_patch then
+    return {
+      kind = "patch",
+      title = "Pending AI patch preview",
+      apply = ":AIApply",
+      reject = ":AIReject",
+      message = "Run `:AIApply` to apply this patch or `:AIReject` to discard it.",
+    }
+  end
+
+  if runner.pending then
+    return {
+      kind = "command",
+      title = "Pending AI command preview",
+      apply = ":AIRun",
+      reject = ":AIReject",
+      message = "Run `:AIRun` to execute this command or `:AIReject` to discard it.",
+    }
+  end
+
+  return nil
+end
+
+function M.pending_notice()
+  local action = M.pending_action()
+  if not action then
+    return ""
+  end
+
+  return table.concat({
+    "",
+    ("> [!TIP] %s"):format(action.title),
+    "> " .. action.message,
+  }, "\n")
+end
+
+local function preview_instruction(review_text)
+  if M.auto_apply_edits_enabled() then
+    return "safety.auto_apply_edits is enabled; applying this preview immediately."
+  end
+  return review_text
+end
+
+local function maybe_auto_apply_preview()
+  if M.auto_apply_edits_enabled() then
+    M.apply_pending()
+    return true
+  end
+  return false
+end
+
 local function strip_code_fence(text)
   local body = text:gsub("^%s+", ""):gsub("%s+$", "")
   local first_line = body:match("^(.-)\n")
@@ -204,7 +270,7 @@ function M.preview_edit(opts)
   local text = table.concat({
     "# " .. title,
     "",
-    "Inspect the proposed replacement, then run :AIApply or :AIReject.",
+    preview_instruction("Inspect the proposed replacement, then run :AIApply or :AIReject."),
     "",
     "```diff",
     diff,
@@ -216,6 +282,7 @@ function M.preview_edit(opts)
   else
     M.open_output("edit-preview", text, "markdown")
   end
+  maybe_auto_apply_preview()
 end
 
 function M.preview_patch(opts)
@@ -241,7 +308,7 @@ function M.preview_patch(opts)
   local text = table.concat({
     "# AI patch preview",
     "",
-    "Inspect the patch, then run :AIApply or :AIReject.",
+    preview_instruction("Inspect the patch, then run :AIApply or :AIReject."),
     "",
     "```diff",
     patch_text,
@@ -253,6 +320,7 @@ function M.preview_patch(opts)
   else
     M.open_output(opts.title or "patch-preview", text, "markdown")
   end
+  maybe_auto_apply_preview()
 end
 
 function M.preview_command(opts)

@@ -654,20 +654,22 @@ local function preview_buffer_replace(args)
     title = string_arg(args, "title", "tool-preview-edit"),
   })
 
-  if not ui.pending_edit then
+  local auto_applied = ui.auto_apply_edits_enabled()
+  if not ui.pending_edit and not auto_applied then
     return nil, "Edit preview did not create a pending edit."
   end
 
   return {
-    status = "previewed",
+    status = auto_applied and "applied" or "previewed",
     action = "buffer_replace",
+    auto_applied = auto_applied,
     bufnr = bufnr,
     path = path,
     start_line = start_line,
     end_line = end_line,
     original_line_count = #original_lines,
     replacement_line_count = #split_lines(args.replacement),
-    message = "Inspect the preview and run :AIApply to apply or :AIReject to discard.",
+    message = auto_applied and "safety.auto_apply_edits is enabled; the edit was applied." or "Inspect the preview and run :AIApply to apply or :AIReject to discard.",
   }
 end
 
@@ -1457,15 +1459,17 @@ register({
       cwd = target_root(),
     })
 
-    if not ui.pending_patch then
+    local auto_apply = ui.auto_apply_edits_enabled()
+    if not ui.pending_patch and not auto_apply then
       return nil, "Patch preview did not create a pending patch."
     end
 
     return {
-      status = "previewed",
+      status = auto_apply and "applying" or "previewed",
       action = "patch",
-      cwd = ui.pending_patch.cwd,
-      message = "Inspect the preview and run :AIApply to apply or :AIReject to discard.",
+      auto_apply = auto_apply,
+      cwd = ui.pending_patch and ui.pending_patch.cwd or target_root(),
+      message = auto_apply and "safety.auto_apply_edits is enabled; applying the patch." or "Inspect the preview and run :AIApply to apply or :AIReject to discard.",
     }
   end),
 })

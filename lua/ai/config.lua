@@ -77,6 +77,7 @@ local defaults = {
     placeholder = "Input & Enter",
   },
   safety = {
+    auto_apply_edits = false,
     allow_dangerous_commands = false,
     blocked_command_patterns = {
       "rm%s+%-rf%s+/",

@@ -3,6 +3,7 @@ local config = require("ai.config")
 local stream_buffer = require("ai.stream_buffer")
 local target = require("ai.target")
 local tools = require("ai.tools")
+local ui = require("ai.ui")
 
 local M = {
   history = {},
@@ -370,6 +371,11 @@ render_history = function(extra)
     vim.list_extend(lines, split_lines(extra))
   end
 
+  local pending_notice = ui.pending_notice()
+  if pending_notice ~= "" then
+    vim.list_extend(lines, split_lines(pending_notice))
+  end
+
   return table.concat(lines, "\n")
 end
 
@@ -398,9 +404,16 @@ local function harness_prompt()
     "After receiving a tool result, either call another tool or answer the user normally.",
     "Stop calling tools once you have enough context to answer the user's request.",
     "Call at most one tool per assistant message.",
-    "Do not claim that a preview tool applied a patch or ran a command.",
-    "Preview tools only prepare pending user-reviewed actions; the user must run :AIApply or :AIRun.",
+    "When the user asks you to change code, prefer nvim_preview_buffer_replace, nvim_preview_file_replace, or nvim_preview_patch instead of only describing the edit.",
+    "Do not claim that a preview tool ran a command.",
   }
+
+  if config.get().safety and config.get().safety.auto_apply_edits == true then
+    table.insert(lines, "safety.auto_apply_edits is enabled; edit preview tools may apply edits immediately after creating the preview.")
+  else
+    table.insert(lines, "Preview edit tools only prepare pending user-reviewed edits; the user must run :AIApply.")
+  end
+  table.insert(lines, "Command preview tools only prepare pending commands; the user must run :AIRun.")
 
   if config.get().chat.native_tools ~= false then
     vim.list_extend(lines, {

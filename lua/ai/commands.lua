@@ -432,6 +432,7 @@ local function edit_selection(cmd, instruction)
     "",
     "Return only the complete replacement text for the selected range.",
     "Do not include explanation, markdown fences, or diff markers.",
+    "The plugin will preview the replacement for user review before applying it.",
   }, "\n")
 
   local bufnr = ui.open_output("edit-request", "Collecting language context...")
@@ -534,6 +535,7 @@ function M.find_bug(cmd)
     "Be strict: report only issues that can cause incorrect behavior, runtime errors, data loss, races, security problems, or broken edge cases.",
     "Do not report style, naming, formatting, or speculative design concerns.",
     "If no clear bug is found, say so.",
+    "If a concrete bug is found, mention that :AIFixBug can create a reviewable fix preview; do not claim to edit files.",
     "Use line references when possible.",
   }, "\n"), "find-bug", { diagnostics = true })
 end
@@ -544,6 +546,15 @@ end
 
 function M.fix(cmd)
   edit_selection(cmd, user_prompt(cmd, "Fix bugs in this code while preserving the public contract."))
+end
+
+function M.fix_bug(cmd)
+  edit_selection(cmd, user_prompt(cmd, table.concat({
+    "Fix concrete correctness bugs in this code with the smallest safe replacement.",
+    "Use diagnostics and language context when available.",
+    "Do not make stylistic refactors or speculative design changes.",
+    "If there is no concrete bug to fix, return the original selected range unchanged.",
+  }, "\n")))
 end
 
 function M.edit(cmd)
@@ -1117,6 +1128,7 @@ function M.setup()
   create_command("AI", M.ai)
   create_command("AIExplain", M.explain)
   create_command("AIFindBug", M.find_bug)
+  create_command("AIFixBug", M.fix_bug)
   create_command("AIRefactor", M.refactor)
   create_command("AIFix", M.fix)
   create_command("AIEdit", M.edit)

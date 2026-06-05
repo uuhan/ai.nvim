@@ -91,6 +91,7 @@ Core editing:
 :AI {prompt}                 " ask about visual selection or current paragraph
 :AIExplain                   " explain selected/current code
 :AIFindBug                   " find concrete bugs in selected/current code
+:AIFixBug                    " generate a concrete bug-fix preview
 :AIEdit {instruction}        " generate replacement and preview diff
 :AIRefactor                  " refactor selected/current code
 :AIFix                       " fix selected/current code
@@ -187,8 +188,10 @@ codex.md
 
 ## Notes
 
-- Edits are never applied automatically. Use `:AIApply` after inspecting the diff.
-- AI-generated patches are never applied automatically. Use `:AIApply` after inspecting the patch.
+- Edits and AI-generated patches create previews by default. Use `:AIApply`
+  after inspecting the diff, or `:AIReject` to discard it.
+- Set `safety.auto_apply_edits = true` only if you want edit and patch previews
+  to apply immediately after they are generated.
 - AI-generated shell commands are never executed automatically. Use `:AIRun` after inspecting the command.
 - `:AISearchProject` uses `rg` when available. It does not maintain a vector database.
 - `:AIReviewDiff` and related commands read `git diff`, `git diff --cached`, and
@@ -200,6 +203,7 @@ codex.md
   symbol hover/definition/references, document/workspace symbols, code action
   listing, git diff, project files/search, patch/command preview, and
   buffer/file range replacement previews.
+- `:AIFixBug` uses the same reviewable replacement-preview path as `:AIEdit`.
 - Command execution has a small safety blocklist by default. Set
   `safety.allow_dangerous_commands = true` only if you want `:AIRun` to skip it.
 - Set `provider.stream = true` to stream normal answers and AIChat text.
@@ -283,6 +287,9 @@ require("ai").setup({
     max_tool_model_chars = 6000,
     max_tool_result_chars = 20000,
     fold_tool_results = true,
+  },
+  safety = {
+    auto_apply_edits = false,
   },
 })
 ```

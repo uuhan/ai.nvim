@@ -1,6 +1,7 @@
 local client = require("ai.client")
 local config = require("ai.config")
 local stream_buffer = require("ai.stream_buffer")
+local ui = require("ai.ui")
 
 local M = {
   output_bufnr = nil,
@@ -70,8 +71,13 @@ local function set_output(text)
   if not valid_buffer(M.output_bufnr) then
     return
   end
+  local display_text = text or ""
+  local pending_notice = ui.pending_notice()
+  if pending_notice ~= "" then
+    display_text = display_text .. pending_notice
+  end
   vim.bo[M.output_bufnr].modifiable = true
-  vim.api.nvim_buf_set_lines(M.output_bufnr, 0, -1, false, split_lines(text))
+  vim.api.nvim_buf_set_lines(M.output_bufnr, 0, -1, false, split_lines(display_text))
   vim.bo[M.output_bufnr].modifiable = false
   if config.get().ui.auto_scroll and valid_window(M.output_winid) then
     local line_count = math.max(1, vim.api.nvim_buf_line_count(M.output_bufnr))
