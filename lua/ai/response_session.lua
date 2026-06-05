@@ -26,6 +26,12 @@ local function valid_buffer(bufnr)
   return bufnr and vim.api.nvim_buf_is_valid(bufnr)
 end
 
+local function stop_insert_mode()
+  if vim.fn.mode():match("^[iR]") then
+    pcall(vim.cmd.stopinsert)
+  end
+end
+
 local function split_lines(text)
   text = (text or ""):gsub("\r\n", "\n")
   local lines = vim.split(text, "\n", { plain = true })
@@ -120,6 +126,26 @@ local function watch_input()
     buffer = M.input_bufnr,
     callback = update_placeholder,
   })
+end
+
+local function watch_output()
+  if not valid_buffer(M.output_bufnr) then
+    return
+  end
+
+  vim.api.nvim_clear_autocmds({ group = M.autocmd_group, buffer = M.output_bufnr })
+  vim.api.nvim_create_autocmd({ "WinEnter", "BufEnter" }, {
+    group = M.autocmd_group,
+    buffer = M.output_bufnr,
+    callback = stop_insert_mode,
+  })
+end
+
+local function focus_output()
+  if valid_window(M.output_winid) then
+    vim.api.nvim_set_current_win(M.output_winid)
+    stop_insert_mode()
+  end
 end
 
 local function focus_input()
@@ -233,9 +259,11 @@ function M.open(title, text, filetype)
 
   set_output(M.text)
   clear_input()
+  watch_output()
   watch_input()
   map_keys()
   update_placeholder()
+  focus_output()
   return M.output_bufnr
 end
 
@@ -262,7 +290,7 @@ function M.attach(bufnr, messages, assistant_text, req_opts)
     table.insert(M.messages, { role = "assistant", content = assistant_text })
   end
   M.req_opts = vim.deepcopy(req_opts or {})
-  focus_input()
+  focus_output()
 end
 
 function M.send()
@@ -303,7 +331,7 @@ function M.send()
         M.text = prefix .. assistant
         table.insert(M.messages, { role = "assistant", content = assistant })
         set_output(M.text)
-        focus_input()
+        focus_output()
       end,
     })
     M.active_stream = renderer
@@ -341,7 +369,7 @@ function M.send()
     M.text = prefix .. response
     table.insert(M.messages, { role = "assistant", content = response })
     set_output(M.text)
-    focus_input()
+    focus_output()
   end)
   if pending then
     M.active_request = request_handle

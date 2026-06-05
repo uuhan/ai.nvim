@@ -34,6 +34,12 @@ local function valid_window(winid)
   return winid and vim.api.nvim_win_is_valid(winid)
 end
 
+local function stop_insert_mode()
+  if vim.fn.mode():match("^[iR]") then
+    pcall(vim.cmd.stopinsert)
+  end
+end
+
 local render_history
 
 local function sync_target_state()
@@ -791,6 +797,13 @@ local function configure_chat_windows()
   vim.wo[M.input_winid].wrap = true
 end
 
+local function focus_messages()
+  if valid_window(M.messages_winid) then
+    vim.api.nvim_set_current_win(M.messages_winid)
+    stop_insert_mode()
+  end
+end
+
 local function open_side(chat_opts)
   vim.cmd(("botright vertical %dnew"):format(chat_opts.width))
   M.messages_winid = vim.api.nvim_get_current_win()
@@ -1240,6 +1253,10 @@ local function ensure_buffers()
     M.messages_bufnr = vim.api.nvim_create_buf(false, true)
     pcall(vim.api.nvim_buf_set_name, M.messages_bufnr, "ai://chat")
     set_scratch(M.messages_bufnr, "markdown", false)
+    vim.api.nvim_create_autocmd({ "WinEnter", "BufEnter" }, {
+      buffer = M.messages_bufnr,
+      callback = stop_insert_mode,
+    })
   end
 
   if not valid_buffer(M.input_bufnr) then
@@ -1266,8 +1283,7 @@ function M.open(opts)
       M.close()
     else
       capture_target()
-      vim.api.nvim_set_current_win(M.input_winid)
-      vim.cmd.startinsert()
+      focus_messages()
       return
     end
   end
@@ -1278,8 +1294,7 @@ function M.open(opts)
 
   if valid_window(M.messages_winid) and valid_window(M.input_winid) then
     capture_target()
-    vim.api.nvim_set_current_win(M.input_winid)
-    vim.cmd.startinsert()
+    focus_messages()
     return
   end
 
@@ -1303,7 +1318,7 @@ function M.open(opts)
   map_input_keys()
   set_messages(render_history())
   update_placeholder()
-  vim.cmd.startinsert()
+  focus_messages()
 end
 
 return M

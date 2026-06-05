@@ -608,6 +608,8 @@ local explain_input_winid = response_session.input_winid
 local explain_input_bufnr = response_session.input_bufnr
 assert(vim.api.nvim_win_get_config(explain_float_winid).relative == "editor", "AIExplain did not render in a floating window")
 assert(vim.api.nvim_win_get_config(explain_input_winid).relative == "editor", "AIExplain did not render follow-up input")
+assert(vim.api.nvim_get_current_win() == explain_float_winid, "AIExplain did not focus response output")
+assert(vim.fn.mode() == "n", "AIExplain output focus did not use normal mode")
 vim.api.nvim_set_current_win(explain_float_winid)
 assert(vim.bo[vim.api.nvim_get_current_buf()].filetype == "markdown", "AIExplain floating output is not markdown")
 assert(vim.fn.maparg("<Esc>", "n", false, true).buffer == 1, "AIExplain floating output missing close keymap")
@@ -643,6 +645,9 @@ end
 assert(saw_initial_reply, "AIExplain follow-up did not include initial assistant reply")
 assert(saw_followup_question, "AIExplain follow-up did not include user question")
 assert(table.concat(vim.api.nvim_buf_get_lines(explain_float_bufnr, 0, -1, false), "\n"):match("follow ok"), "AIExplain follow-up did not render response")
+assert(vim.api.nvim_get_current_win() == explain_float_winid, "AIExplain follow-up did not return focus to response output")
+assert(vim.fn.mode() == "n", "AIExplain follow-up output focus did not use normal mode")
+vim.api.nvim_set_current_win(explain_input_winid)
 local input_q_map = vim.fn.maparg("q", "n", false, true)
 assert(type(input_q_map.callback) == "function", "AIExplain follow-up q keymap is not callable")
 input_q_map.callback()
@@ -835,10 +840,12 @@ package.loaded["render-markdown"] = {
 }
 
 vim.cmd("AIChat")
-assert(vim.api.nvim_buf_get_name(0):match("ai://chat%-input"), "AIChat did not focus input pane")
+local chat = require("ai.chat")
+assert(vim.api.nvim_buf_get_name(0):match("ai://chat$"), "AIChat did not focus message pane")
+assert(vim.fn.mode() == "n", "AIChat message focus did not use normal mode")
+vim.api.nvim_set_current_win(chat.input_winid)
 assert(vim.fn.maparg("<CR>", "i", false, true).buffer == 1, "AIChat send keymap missing")
 assert(vim.fn.maparg("<C-q>", "i", false, true).buffer == 1, "AIChat input close keymap missing")
-local chat = require("ai.chat")
 assert(chat.target_bufnr == tool_buf, "AIChat did not retain target editor buffer")
 local chat_state = run_tool("nvim_editor_state")
 assert(chat_state.current_buffer.name:match("ai://chat%-input"), "editor state did not report actual focused chat buffer")
@@ -1068,6 +1075,8 @@ vim.cmd("AIChatToggle")
 assert(not chat.is_open(), "AIChat toggle did not close chat panes")
 vim.cmd("AIChatToggle")
 assert(chat.is_open(), "AIChat toggle did not reopen chat panes")
+assert(vim.api.nvim_get_current_win() == chat.messages_winid, "AIChat toggle did not focus message pane")
+assert(vim.fn.mode() == "n", "AIChat toggle message focus did not use normal mode")
 local closed_messages_winid = chat.messages_winid
 local closed_input_winid = chat.input_winid
 chat.close()
@@ -1076,7 +1085,8 @@ assert(not vim.api.nvim_win_is_valid(closed_input_winid), "AIChat close did not 
 
 vim.cmd("AIPopChat")
 assert(chat.layout == "float", "AIPopChat did not use float layout")
-assert(vim.api.nvim_buf_get_name(0):match("ai://chat%-input"), "AIPopChat did not focus input pane")
+assert(vim.api.nvim_get_current_win() == chat.messages_winid, "AIPopChat did not focus message pane")
+assert(vim.fn.mode() == "n", "AIPopChat message focus did not use normal mode")
 local pop_messages_config = vim.api.nvim_win_get_config(chat.messages_winid)
 local pop_input_config = vim.api.nvim_win_get_config(chat.input_winid)
 assert(pop_messages_config.relative == "editor", "AIPopChat messages pane is not floating")
@@ -1089,6 +1099,8 @@ assert(not vim.api.nvim_win_is_valid(closed_messages_winid), "AIPopChatToggle di
 assert(not vim.api.nvim_win_is_valid(closed_input_winid), "AIPopChatToggle did not close input pane")
 vim.cmd("AIPopChatToggle")
 assert(chat.layout == "float", "AIPopChatToggle did not reopen float layout")
+assert(vim.api.nvim_get_current_win() == chat.messages_winid, "AIPopChatToggle did not focus message pane")
+assert(vim.fn.mode() == "n", "AIPopChatToggle message focus did not use normal mode")
 chat.close()
 
 local target = vim.api.nvim_create_buf(true, false)

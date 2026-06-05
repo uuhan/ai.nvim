@@ -105,7 +105,8 @@ session. This includes `:AI`, `:AIExplain`, `:AIFindBug`, `:AITest`,
 `:AIExplainDiff`, `:AIFindBugInDiff`, and `:AICommitMessage`.
 The bottom input lets you continue the same request as a lightweight follow-up
 conversation, so you can challenge a finding or ask for clarification without
-recollecting context. Press `q`, `<Esc>`, or `<C-q>` to close it.
+recollecting context. The response pane keeps focus in normal mode; press `i`
+to focus the follow-up input. Press `q`, `<Esc>`, or `<C-q>` to close it.
 
 Buffer and project context:
 
@@ -236,7 +237,8 @@ q close AI window
 
 `:AIChat` opens a right-side chat panel. `:AIPopChat` opens the same chat in a
 floating popup. The top pane shows the conversation, and the bottom pane is the
-input area. Press `<CR>` or `<C-s>` in the input pane to send, `<C-c>` or
+input area. The conversation pane keeps focus in normal mode; press `i` or
+`<CR>` there to focus the input. Press `<CR>` or `<C-s>` in the input pane to send, `<C-c>` or
 `:AIChatStop` to stop the active request, `<C-l>` to clear the chat, and
 `<C-q>` or `q` to close the panel. The conversation pane shows a small status
 line such as `thinking`, `running tool`, or `idle`. The empty input pane shows
