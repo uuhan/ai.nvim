@@ -839,6 +839,9 @@ local function agent_step(fn)
   end
 end
 
+local plan_action_names = { "next", "apply", "run", "done", "skip", "show", "reset" }
+local plan_actions
+
 function M.plan_next()
   agent_step(agent.preview_next)
 end
@@ -878,6 +881,31 @@ end
 function M.plan_reset()
   agent.reset()
   ui.notify("AI plan cleared.")
+end
+
+plan_actions = {
+  next = M.plan_next,
+  apply = M.plan_apply,
+  run = M.plan_run,
+  done = M.plan_done,
+  skip = M.plan_skip,
+  show = M.plan_show,
+  reset = M.plan_reset,
+}
+
+function M.plan(cmd)
+  local action = (cmd.args or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
+  if action == "" then
+    action = "show"
+  end
+
+  local fn = plan_actions[action]
+  if not fn then
+    ui.notify("Usage: :AIPlan " .. table.concat(plan_action_names, "|"), vim.log.levels.ERROR)
+    return
+  end
+
+  fn()
 end
 
 function M.chat(cmd)
@@ -1034,7 +1062,33 @@ local function complete_tool_names(arg_lead, cmdline)
   return out
 end
 
+local function complete_plan_actions(arg_lead, cmdline)
+  if cmdline:match("^%s*AIPlan%s+%S+%s") then
+    return {}
+  end
+
+  local out = {}
+  for _, name in ipairs(plan_action_names) do
+    if name:sub(1, #arg_lead) == arg_lead then
+      table.insert(out, name)
+    end
+  end
+  return out
+end
+
 function M.setup()
+  for _, name in ipairs({
+    "AIPlanNext",
+    "AIPlanApply",
+    "AIPlanRun",
+    "AIPlanDone",
+    "AIPlanSkip",
+    "AIPlanShow",
+    "AIPlanReset",
+  }) do
+    pcall(vim.api.nvim_del_user_command, name)
+  end
+
   create_command("AI", M.ai)
   create_command("AIExplain", M.explain)
   create_command("AIRefactor", M.refactor)
@@ -1054,13 +1108,7 @@ function M.setup()
   create_command("AICmd", M.cmd, { range = false })
   create_command("AIGit", M.git_cmd, { range = false })
   create_command("AIAgent", M.agent, { range = false })
-  create_command("AIPlanNext", M.plan_next, { nargs = 0, range = false })
-  create_command("AIPlanApply", M.plan_apply, { nargs = 0, range = false })
-  create_command("AIPlanRun", M.plan_run, { nargs = 0, range = false })
-  create_command("AIPlanDone", M.plan_done, { nargs = 0, range = false })
-  create_command("AIPlanSkip", M.plan_skip, { nargs = 0, range = false })
-  create_command("AIPlanShow", M.plan_show, { nargs = 0, range = false })
-  create_command("AIPlanReset", M.plan_reset, { nargs = 0, range = false })
+  create_command("AIPlan", M.plan, { nargs = "?", range = false, complete = complete_plan_actions })
   create_command("AIChat", M.chat, { range = false })
   create_command("AIPopChat", M.pop_chat, { range = false })
   create_command("AIChatToggle", M.chat_toggle, { nargs = 0, range = false })

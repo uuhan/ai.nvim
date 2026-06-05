@@ -191,7 +191,7 @@ function M.render(state)
     table.insert(lines, "")
   end
 
-  table.insert(lines, "Commands: :AIPlanNext, :AIPlanApply, :AIPlanRun, :AIPlanDone, :AIPlanSkip, :AIReject")
+  table.insert(lines, "Commands: :AIPlan next, :AIPlan apply, :AIPlan run, :AIPlan done, :AIPlan skip, :AIReject")
   table.insert(lines, "")
 
   for index, step in ipairs(state.steps) do

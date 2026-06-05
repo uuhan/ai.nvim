@@ -20,13 +20,7 @@ local commands = {
   "AICmd",
   "AIGit",
   "AIAgent",
-  "AIPlanNext",
-  "AIPlanApply",
-  "AIPlanRun",
-  "AIPlanDone",
-  "AIPlanSkip",
-  "AIPlanShow",
-  "AIPlanReset",
+  "AIPlan",
   "AIFixAllDiagnostics",
   "AIReviewDiff",
   "AISearchProject",
@@ -45,6 +39,18 @@ local commands = {
 
 for _, name in ipairs(commands) do
   assert(vim.fn.exists(":" .. name) == 2, "missing command " .. name)
+end
+
+for _, name in ipairs({
+  "AIPlanNext",
+  "AIPlanApply",
+  "AIPlanRun",
+  "AIPlanDone",
+  "AIPlanSkip",
+  "AIPlanShow",
+  "AIPlanReset",
+}) do
+  assert(vim.fn.exists(":" .. name) == 0, "old plan command should not exist: " .. name)
 end
 
 local function run_tool(name, args)

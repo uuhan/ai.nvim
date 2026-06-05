@@ -136,13 +136,13 @@ Agent plan:
 
 ```vim
 :AIAgent {task}              " create a reviewable plan
-:AIPlanNext                  " preview the next pending step
-:AIPlanApply                 " preview the next patch step
-:AIPlanRun                   " preview the next command/test step
-:AIPlanDone                  " mark the active step done
-:AIPlanSkip                  " skip the active step
-:AIPlanShow                  " show the active plan
-:AIPlanReset                 " clear the active plan
+:AIPlan next                 " preview the next pending step
+:AIPlan apply                " preview the next patch step
+:AIPlan run                  " preview the next command/test step
+:AIPlan done                 " mark the active step done
+:AIPlan skip                 " skip the active step
+:AIPlan show                 " show the active plan
+:AIPlan reset                " clear the active plan
 ```
 
 Chat:
@@ -213,8 +213,8 @@ codex.md
   table with `request(req, cb)` and `stream(req, callbacks)` when you want to
   route requests through another HTTP client.
 - `:AIAgent` generates a plan only. It does not apply patches or run commands.
-  Use `:AIPlanApply` with `:AIApply`, or `:AIPlanRun` with `:AIRun`, then
-  `:AIPlanDone` to advance the plan.
+  Use `:AIPlan apply` with `:AIApply`, or `:AIPlan run` with `:AIRun`, then
+  `:AIPlan done` to advance the plan.
 - `:AIPing` sends a tiny non-streaming request to the configured model and shows
   provider, model, elapsed time, and response.
 
