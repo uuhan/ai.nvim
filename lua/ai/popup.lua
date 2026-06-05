@@ -58,7 +58,12 @@ end
 
 function M.close()
   if valid_window(M.winid) then
-    pcall(vim.api.nvim_win_close, M.winid, true)
+    pcall(vim.api.nvim_win_call, M.winid, function()
+      vim.cmd("silent! noautocmd close")
+    end)
+    if valid_window(M.winid) then
+      pcall(vim.api.nvim_win_close, M.winid, true)
+    end
   end
   M.winid = nil
 end
@@ -75,6 +80,17 @@ local function map_keys(bufnr)
   end
 
   vim.keymap.set("n", "<Esc>", M.close, {
+    buffer = bufnr,
+    nowait = true,
+    silent = true,
+    desc = "Close AI popup",
+  })
+  vim.keymap.set({ "n", "i" }, "<C-q>", function()
+    if vim.fn.mode():match("^[iR]") then
+      vim.cmd.stopinsert()
+    end
+    M.close()
+  end, {
     buffer = bufnr,
     nowait = true,
     silent = true,
