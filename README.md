@@ -92,6 +92,7 @@ Core editing:
 :AIExplain                   " explain selected/current code
 :AIFindBug                   " find concrete bugs in selected/current code
 :AIFixBug                    " generate a concrete bug-fix preview
+:AIImplement {request}       " implement a feature as a patch preview
 :AIEdit {instruction}        " generate replacement and preview diff
 :AIRefactor                  " refactor selected/current code
 :AIFix                       " fix selected/current code
@@ -204,6 +205,8 @@ codex.md
   listing, git diff, project files/search, patch/command preview, and
   buffer/file range replacement previews.
 - `:AIFixBug` uses the same reviewable replacement-preview path as `:AIEdit`.
+- `:AIImplement` collects current editor context, diagnostics, language context,
+  and relevant project search context, then creates a unified diff preview.
 - Command execution has a small safety blocklist by default. Set
   `safety.allow_dangerous_commands = true` only if you want `:AIRun` to skip it.
 - Set `provider.stream = true` to stream normal answers and AIChat text.

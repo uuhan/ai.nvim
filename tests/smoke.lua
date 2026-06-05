@@ -15,6 +15,7 @@ local commands = {
   "AIExplain",
   "AIFindBug",
   "AIFixBug",
+  "AIImplement",
   "AIEdit",
   "AIApply",
   "AIReject",
@@ -83,6 +84,7 @@ local tools = require("ai.tools")
 local client = require("ai.client")
 local config = require("ai.config")
 local context = require("ai.context")
+local popup = require("ai.popup")
 local response_session = require("ai.response_session")
 local stream_buffer = require("ai.stream_buffer")
 local ui = require("ai.ui")
@@ -755,6 +757,38 @@ assert(request_params_by_method["textDocument/codeAction"].range.start.character
 assert(request_params_by_method["textDocument/codeAction"].range["end"].character == 8, "AIEdit used the wrong code action end column")
 
 vim.api.nvim_set_current_buf(tool_buf)
+vim.api.nvim_win_set_cursor(0, { 1, 6 })
+local implement_prompt_seen
+client.chat = function(messages, _, cb)
+  assert(messages[1].content:match("Return a unified diff only"), "AIImplement did not include patch-only system instruction")
+  implement_prompt_seen = messages[2].content
+  cb(nil, [[
+diff --git a/test.lua b/test.lua
+--- a/test.lua
++++ b/test.lua
+@@ -1 +1 @@
+-local x = 1
++local x = 4
+]])
+end
+request_params_by_method = {}
+vim.cmd("AIImplement add support for x")
+assert(vim.wait(5000, function()
+  return implement_prompt_seen ~= nil
+end), "timed out waiting for AIImplement prompt")
+assert(implement_prompt_seen:match("Implement the requested change"), "AIImplement used the wrong prompt")
+assert(implement_prompt_seen:match("User request:%s+add support for x"), "AIImplement did not include user request")
+assert(implement_prompt_seen:match("Current editor context:"), "AIImplement did not include editor context")
+assert(implement_prompt_seen:match("Relevant project context:"), "AIImplement did not include project context")
+assert(implement_prompt_seen:match("Available code actions:"), "AIImplement did not include code actions")
+assert(ui.pending_patch and ui.pending_patch.title == "implement", "AIImplement did not create a pending patch preview")
+assert(popup.is_open(), "AIImplement did not render patch preview in a popup")
+assert(vim.api.nvim_win_get_config(popup.winid).relative == "editor", "AIImplement popup is not floating")
+assert(vim.fn.maparg("a", "n", false, true).buffer == 1, "AIImplement popup missing apply keymap")
+ui.reject_pending()
+popup.close()
+
+vim.api.nvim_set_current_buf(tool_buf)
 local diagnostic_ns = vim.api.nvim_create_namespace("ai.nvim.test.diagnostic")
 vim.diagnostic.set(diagnostic_ns, tool_buf, {
   {
@@ -1194,6 +1228,30 @@ diff --git a/test.lua b/test.lua
 ```
 ]])
 assert(extracted and extracted:match("diff %-%-git a/test.lua b/test.lua"), "patch extraction failed")
+local extracted_with_trailing_text = patch.extract([[
+diff --git a/test.lua b/test.lua
+--- a/test.lua
++++ b/test.lua
+@@ -1 +1 @@
+-local x = 1
++local x = 2
+
+This patch updates the value.
+]])
+assert(extracted_with_trailing_text and not extracted_with_trailing_text:match("This patch"), "patch extraction included trailing prose")
+local extracted_fenced_with_trailing_text = patch.extract([[
+```diff
+diff --git a/test.lua b/test.lua
+--- a/test.lua
++++ b/test.lua
+@@ -1 +1 @@
+-local x = 1
++local x = 2
+
+This patch updates the value.
+```
+]])
+assert(extracted_fenced_with_trailing_text and not extracted_fenced_with_trailing_text:match("This patch"), "fenced patch extraction included trailing prose")
 
 local locations = require("ai.locations")
 local parsed = locations.parse("lua/ai/init.lua:1:1 check this line")
@@ -1216,9 +1274,11 @@ local current = vim.api.nvim_create_buf(true, false)
 vim.api.nvim_set_current_buf(current)
 vim.api.nvim_buf_set_name(current, tmp .. "/test.lua")
 vim.api.nvim_buf_set_lines(current, 0, -1, false, { "local x = 1" })
+vim.bo[current].modified = false
 
 local apply_done = false
 local apply_err
+local apply_message
 patch.apply([[
 diff --git a/test.lua b/test.lua
 --- a/test.lua
@@ -1226,8 +1286,11 @@ diff --git a/test.lua b/test.lua
 @@ -1 +1 @@
 -local x = 1
 +local x = 2
-]], function(err)
+
+This patch updates the value.
+]], function(err, message)
   apply_err = err
+  apply_message = message
   apply_done = true
 end)
 
@@ -1236,7 +1299,58 @@ assert(vim.wait(5000, function()
 end), "timed out waiting for patch apply")
 assert(not apply_err, apply_err)
 local changed = vim.fn.readfile(tmp .. "/test.lua")
-assert(changed[1] == "local x = 2", "git apply path did not change temp file")
+assert(changed[1] == "local x = 1", "buffer patch apply wrote to disk before save")
+assert(vim.api.nvim_buf_get_lines(current, 0, 1, false)[1] == "local x = 2", "buffer patch apply did not update loaded buffer")
+assert(vim.bo[current].modified, "buffer patch apply did not mark buffer modified")
+assert(apply_message and apply_message:match("Patch applied to 1 buffer"), "buffer patch apply did not report applied buffer")
+
+vim.fn.writefile({ "-- old" }, tmp .. "/comment.lua")
+local comment_buf = vim.api.nvim_create_buf(true, false)
+vim.api.nvim_buf_set_name(comment_buf, tmp .. "/comment.lua")
+vim.api.nvim_buf_set_lines(comment_buf, 0, -1, false, { "-- old" })
+vim.bo[comment_buf].modified = false
+local comment_done = false
+local comment_err
+patch.apply([[
+diff --git a/comment.lua b/comment.lua
+--- a/comment.lua
++++ b/comment.lua
+@@ -1 +1 @@
+--- old
++-- new
+]], function(err)
+  comment_err = err
+  comment_done = true
+end, { cwd = tmp })
+assert(vim.wait(5000, function()
+  return comment_done
+end), "timed out waiting for comment patch apply")
+assert(not comment_err, comment_err)
+assert(vim.api.nvim_buf_get_lines(comment_buf, 0, 1, false)[1] == "-- new", "buffer patch apply misparsed comment hunk lines")
+
+vim.fn.writefile({ "local wrong = 1" }, tmp .. "/wrong-count.lua")
+local wrong_count_buf = vim.api.nvim_create_buf(true, false)
+vim.api.nvim_buf_set_name(wrong_count_buf, tmp .. "/wrong-count.lua")
+vim.api.nvim_buf_set_lines(wrong_count_buf, 0, -1, false, { "local wrong = 1" })
+vim.bo[wrong_count_buf].modified = false
+local wrong_count_done = false
+local wrong_count_err
+patch.apply([[
+diff --git a/wrong-count.lua b/wrong-count.lua
+--- a/wrong-count.lua
++++ b/wrong-count.lua
+@@ -1,99 +1,99 @@
+-local wrong = 1
++local wrong = 2
+]], function(err)
+  wrong_count_err = err
+  wrong_count_done = true
+end, { cwd = tmp })
+assert(vim.wait(5000, function()
+  return wrong_count_done
+end), "timed out waiting for wrong-count patch apply")
+assert(not wrong_count_err, wrong_count_err)
+assert(vim.api.nvim_buf_get_lines(wrong_count_buf, 0, 1, false)[1] == "local wrong = 2", "buffer patch apply rejected wrong hunk counts")
 
 local runner = require("ai.runner")
 runner.preview("git reset --hard", { cwd = tmp })

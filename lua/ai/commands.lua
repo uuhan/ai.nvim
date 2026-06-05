@@ -162,13 +162,30 @@ local function request_output(title, req_messages, opts, bufnr, on_success)
   end)
 end
 
-local function request_patch(title, req_messages, bufnr, cwd)
+local function open_patch_output(title, text, opts)
+  opts = opts or {}
+  if opts.output == "popup" then
+    return popup.open(title, text, opts.filetype or "markdown")
+  end
+  return ui.open_output(title, text, opts.filetype)
+end
+
+local function set_patch_output(bufnr, title, text, opts)
+  opts = opts or {}
+  if opts.output == "popup" then
+    return popup.set(bufnr, title, text, opts.filetype or "markdown")
+  end
+  return ui.set_output(bufnr, title, text, opts.filetype)
+end
+
+local function request_patch(title, req_messages, bufnr, cwd, opts)
+  opts = opts or {}
   cwd = cwd or context.root(0)
-  bufnr = bufnr or ui.open_output(title, "Requesting AI patch...")
-  ui.set_output(bufnr, title, "Requesting AI patch...")
+  bufnr = bufnr or open_patch_output(title, "Requesting AI patch...", opts)
+  set_patch_output(bufnr, title, "Requesting AI patch...", opts)
   client.chat(req_messages, {}, function(err, text)
     if err then
-      ui.set_output(bufnr, title .. "-error", err)
+      set_patch_output(bufnr, title .. "-error", err, opts)
       return
     end
     ui.preview_patch({
@@ -176,6 +193,7 @@ local function request_patch(title, req_messages, bufnr, cwd)
       text = text,
       cwd = cwd,
       output_bufnr = bufnr,
+      output = opts.output,
     })
   end)
 end
@@ -510,6 +528,52 @@ local function full_buffer_prompt(cmd, instruction)
   }, "\n")
 end
 
+local function implement_prompt(task, root, sel, diagnostics, project_context, language_context)
+  local lines = {
+    "Implement the requested change as a reviewable patch.",
+    "Return only a unified diff that can be applied to Neovim buffers.",
+    "Use paths relative to the project root.",
+    "Do not include explanation, markdown fences, or commentary.",
+    "Do not include prose before or after the diff.",
+    "Every hunk must include complete context and correct line counts; do not use abbreviated hunks.",
+    "Keep the patch focused on the requested behavior.",
+    "Preserve unrelated behavior and public contracts.",
+    "",
+    ("Project root: %s"):format(root),
+    "",
+    "User request:",
+    task,
+    "",
+    "Current editor context:",
+    ("File: %s"):format(sel.path ~= "" and rel_path(sel.path, root) or "[No Name]"),
+    ("Filetype: %s"):format(sel.filetype ~= "" and sel.filetype or "unknown"),
+    ("Lines: %d-%d"):format(sel.line1, sel.line2),
+    "",
+    "```" .. (sel.filetype ~= "" and sel.filetype or "text"),
+    sel.text,
+    "```",
+  }
+
+  if language_context and language_context ~= "" then
+    vim.list_extend(lines, {
+      "",
+      "Language context:",
+      language_context,
+    })
+  end
+
+  vim.list_extend(lines, {
+    "",
+    "Diagnostics:",
+    diagnostics ~= "" and diagnostics or "No diagnostics in loaded buffers.",
+    "",
+    "Relevant project context:",
+    project_context ~= "" and project_context or "No additional project context found.",
+  })
+
+  return table.concat(lines, "\n")
+end
+
 local function create_command(name, fn, opts)
   opts = vim.tbl_extend("force", {
     nargs = "*",
@@ -561,6 +625,35 @@ function M.edit(cmd)
   edit_selection(cmd, user_prompt(cmd, "Improve this code while preserving behavior."))
 end
 
+function M.implement(cmd)
+  local task = user_prompt(cmd, "Implement the requested change.")
+  local root = context.root(0)
+  local sel = context.selection_context(cmd)
+  local opts = { output = "popup" }
+  local bufnr = open_patch_output("implement", "Collecting implementation context...", opts)
+  local diagnostics = context.all_diagnostics_context(120)
+
+  collect_selection_language_context(sel, {
+    hover = true,
+    definition = true,
+    document_symbols = true,
+    diagnostics = true,
+    code_actions = true,
+  }, function(language_context)
+    set_patch_output(bufnr, "implement", "Searching project context...", opts)
+    context.project_context(task, function(err, project_ctx)
+      if err then
+        project_ctx = "Project context unavailable:\n" .. err
+      end
+
+      local prompt = implement_prompt(task, root, sel, diagnostics, project_ctx or "", language_context)
+      request_patch("implement", messages(prompt, [[You are implementing a Neovim coding task.
+Return a unified diff only.
+The plugin will preview the patch for user review before applying it.]]), bufnr, root, opts)
+    end, root)
+  end)
+end
+
 function M.test(cmd)
   ask_selection(cmd, "Suggest focused tests for this code. Include test names and cases, not broad testing advice.", "tests")
 end
@@ -596,7 +689,7 @@ function M.fix_diagnostic()
   collect_diagnostic_language_context(diag, function(language_context)
     local lines = {
       "Fix the following diagnostic.",
-      "Return only a unified diff that can be applied with git apply.",
+      "Return only a unified diff that can be applied to Neovim buffers.",
       "Use paths relative to the project root.",
       "",
       ("Project root: %s"):format(diag.root or context.root(diag.bufnr or 0)),
@@ -631,7 +724,7 @@ function M.fix_all_diagnostics()
 
   local prompt = table.concat({
     "Fix these diagnostics reported by the editor.",
-    "Return only a unified diff that can be applied with git apply.",
+    "Return only a unified diff that can be applied to Neovim buffers.",
     "Use paths relative to the project root.",
     "",
     ("Project root: %s"):format(context.root(0)),
@@ -650,7 +743,7 @@ function M.fix_quickfix()
   end
   local prompt = table.concat({
     "Fix these quickfix entries.",
-    "Return only a unified diff that can be applied with git apply.",
+    "Return only a unified diff that can be applied to Neovim buffers.",
     "Use paths relative to the project root.",
     "",
     ("Project root: %s"):format(context.root(0)),
@@ -1129,6 +1222,7 @@ function M.setup()
   create_command("AIExplain", M.explain)
   create_command("AIFindBug", M.find_bug)
   create_command("AIFixBug", M.fix_bug)
+  create_command("AIImplement", M.implement)
   create_command("AIRefactor", M.refactor)
   create_command("AIFix", M.fix)
   create_command("AIEdit", M.edit)

@@ -290,7 +290,13 @@ function M.preview_patch(opts)
   if patch_text == "" then
     M.notify("AI response did not include a unified diff.", vim.log.levels.WARN)
     if opts.output_bufnr then
-      M.set_output(opts.output_bufnr, opts.title or "patch-response", opts.text or "")
+      if opts.output == "popup" then
+        popup.set(opts.output_bufnr, opts.title or "patch-response", opts.text or "", "markdown")
+      else
+        M.set_output(opts.output_bufnr, opts.title or "patch-response", opts.text or "")
+      end
+    elseif opts.output == "popup" then
+      popup.open(opts.title or "patch-response", opts.text or "", "markdown")
     else
       M.open_output(opts.title or "patch-response", opts.text or "")
     end
@@ -316,7 +322,13 @@ function M.preview_patch(opts)
   }, "\n")
 
   if opts.output_bufnr then
-    M.set_output(opts.output_bufnr, opts.title or "patch-preview", text, "markdown")
+    if opts.output == "popup" then
+      popup.set(opts.output_bufnr, opts.title or "patch-preview", text, "markdown")
+    else
+      M.set_output(opts.output_bufnr, opts.title or "patch-preview", text, "markdown")
+    end
+  elseif opts.output == "popup" then
+    popup.open(opts.title or "patch-preview", text, "markdown")
   else
     M.open_output(opts.title or "patch-preview", text, "markdown")
   end
@@ -363,13 +375,13 @@ function M.apply_pending()
   if M.pending_patch then
     local pending = M.pending_patch
     M.notify("Applying AI patch...")
-    patch.apply(pending.patch, function(err)
+    patch.apply(pending.patch, function(err, message)
       if err then
         M.notify(err, vim.log.levels.ERROR)
         return
       end
       M.pending_patch = nil
-      M.notify("AI patch applied.")
+      M.notify(message or "AI patch applied.")
     end, { cwd = pending.cwd })
     return
   end

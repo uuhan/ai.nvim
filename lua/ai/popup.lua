@@ -69,7 +69,26 @@ function M.close()
 end
 
 local function map_keys(bufnr)
-  local close_key = (config.get().ui.buffer_keymaps or {}).close
+  local keys = config.get().ui.buffer_keymaps or {}
+  local mappings = {
+    apply = { rhs = function() require("ai.ui").apply_pending() end, desc = "AI apply pending edit or patch" },
+    reject = { rhs = function() require("ai.ui").reject_pending() end, desc = "AI reject pending action" },
+    run = { rhs = function() require("ai.ui").run_pending_command() end, desc = "AI run pending command" },
+  }
+
+  for name, spec in pairs(mappings) do
+    local lhs = keys[name]
+    if lhs and lhs ~= "" then
+      vim.keymap.set("n", lhs, spec.rhs, {
+        buffer = bufnr,
+        nowait = true,
+        silent = true,
+        desc = spec.desc,
+      })
+    end
+  end
+
+  local close_key = keys.close
   if close_key and close_key ~= "" then
     vim.keymap.set("n", close_key, M.close, {
       buffer = bufnr,
