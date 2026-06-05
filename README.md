@@ -99,11 +99,13 @@ Core editing:
 :AIReject                    " clear the latest AI edit preview
 ```
 
-Read-only one-shot commands render their response in a focused floating Markdown
-window. This includes `:AI`, `:AIExplain`, `:AIFindBug`, `:AITest`, `:AIBuffer`,
-`:AISummarizeFile`, `:AISearchProject`, `:AIExplainDiff`, and
-`:AICommitMessage`.
-Press `q` or `<Esc>` to close it.
+Read-only one-shot commands render their response in a floating Markdown result
+session. This includes `:AI`, `:AIExplain`, `:AIFindBug`, `:AITest`,
+`:AIBuffer`, `:AISummarizeFile`, `:AISearchProject`, `:AIReviewDiff`,
+`:AIExplainDiff`, `:AIFindBugInDiff`, and `:AICommitMessage`.
+The bottom input lets you continue the same request as a lightweight follow-up
+conversation, so you can challenge a finding or ask for clarification without
+recollecting context. Press `q`, `<Esc>`, or `<C-q>` to close it.
 
 Buffer and project context:
 

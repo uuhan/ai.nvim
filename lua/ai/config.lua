@@ -72,6 +72,10 @@ local defaults = {
     max_tool_result_chars = 20000,
     fold_tool_results = true,
   },
+  response = {
+    input_title = " 追问 ",
+    placeholder = "继续追问，Enter 发送",
+  },
   safety = {
     allow_dangerous_commands = false,
     blocked_command_patterns = {

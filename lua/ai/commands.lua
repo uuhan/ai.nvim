@@ -5,6 +5,7 @@ local config = require("ai.config")
 local context = require("ai.context")
 local locations = require("ai.locations")
 local popup = require("ai.popup")
+local response_session = require("ai.response_session")
 local stream_buffer = require("ai.stream_buffer")
 local tools = require("ai.tools")
 local ui = require("ai.ui")
@@ -79,12 +80,16 @@ local function provider_opts(opts)
   local out = vim.tbl_extend("force", {}, opts or {})
   out.output = nil
   out.filetype = nil
+  out.session = nil
   return out
 end
 
 local function open_response_output(title, text, opts)
   opts = opts or {}
   if opts.output == "popup" then
+    if opts.session ~= false then
+      return response_session.open(title, text, opts.filetype or "markdown")
+    end
     return popup.open(title, text, opts.filetype or "markdown")
   end
   return ui.open_output(title, text, opts.filetype)
@@ -93,6 +98,9 @@ end
 local function set_response_output(bufnr, title, text, opts)
   opts = opts or {}
   if opts.output == "popup" then
+    if opts.session ~= false then
+      return response_session.set(bufnr, title, text, opts.filetype or "markdown")
+    end
     return popup.set(bufnr, title, text, opts.filetype or "markdown")
   end
   return ui.set_output(bufnr, title, text, opts.filetype)
@@ -116,6 +124,9 @@ local function request_output(title, req_messages, opts, bufnr, on_success)
         set_response_output(bufnr, title, text, opts)
       end,
       on_done = function(text)
+        if opts.output == "popup" and opts.session ~= false then
+          response_session.attach(bufnr, req_messages, text, req_opts)
+        end
         if on_success then
           on_success(text, bufnr)
         end
@@ -142,6 +153,9 @@ local function request_output(title, req_messages, opts, bufnr, on_success)
       return
     end
     set_response_output(bufnr, title, text, opts)
+    if opts.output == "popup" and opts.session ~= false then
+      response_session.attach(bufnr, req_messages, text, req_opts)
+    end
     if on_success then
       on_success(text, bufnr)
     end
@@ -667,7 +681,7 @@ function M.review_diff()
     if count > 0 then
       ui.notify(("Added %d AI review locations."):format(count))
     end
-  end)
+  end, { output = "popup" })
 end
 
 function M.explain_diff()
@@ -680,7 +694,7 @@ function M.find_bug_in_diff()
     if count > 0 then
       ui.notify(("Added %d AI bug locations."):format(count))
     end
-  end)
+  end, { output = "popup" })
 end
 
 function M.commit_message()

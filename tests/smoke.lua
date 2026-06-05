@@ -82,6 +82,7 @@ local tools = require("ai.tools")
 local client = require("ai.client")
 local config = require("ai.config")
 local context = require("ai.context")
+local response_session = require("ai.response_session")
 local stream_buffer = require("ai.stream_buffer")
 assert(#tools.list() >= 10, "tool registry is too small")
 assert(#tools.openai_tools() == #tools.list(), "OpenAI tool export size mismatch")
@@ -601,15 +602,52 @@ assert(explain_prompt:match("Language context:"), "AIExplain did not include lan
 assert(explain_prompt:match("hover docs"), "AIExplain did not include symbol hover")
 assert(explain_prompt:match("Current file symbols"), "AIExplain did not include document symbols")
 assert(request_params_by_method["textDocument/hover"].position.character == 6, "AIExplain used the wrong hover column")
-local explain_float_winid = vim.api.nvim_get_current_win()
-local explain_float_bufnr = vim.api.nvim_get_current_buf()
+local explain_float_winid = response_session.output_winid
+local explain_float_bufnr = response_session.output_bufnr
+local explain_input_winid = response_session.input_winid
+local explain_input_bufnr = response_session.input_bufnr
 assert(vim.api.nvim_win_get_config(explain_float_winid).relative == "editor", "AIExplain did not render in a floating window")
+assert(vim.api.nvim_win_get_config(explain_input_winid).relative == "editor", "AIExplain did not render follow-up input")
+vim.api.nvim_set_current_win(explain_float_winid)
 assert(vim.bo[vim.api.nvim_get_current_buf()].filetype == "markdown", "AIExplain floating output is not markdown")
 assert(vim.fn.maparg("<Esc>", "n", false, true).buffer == 1, "AIExplain floating output missing close keymap")
 assert(vim.fn.maparg("<C-q>", "n", false, true).buffer == 1, "AIExplain floating output missing normal ctrl-q close keymap")
+vim.api.nvim_set_current_win(explain_input_winid)
+assert(vim.api.nvim_get_current_buf() == explain_input_bufnr, "AIExplain did not focus follow-up input")
+assert(vim.bo[vim.api.nvim_get_current_buf()].filetype == "text", "AIExplain follow-up input is not text")
+assert(#vim.api.nvim_buf_get_extmarks(explain_input_bufnr, response_session.placeholder_ns, 0, -1, {}) == 1, "AIExplain follow-up placeholder missing")
+assert(vim.fn.maparg("q", "n", false, true).buffer == 1, "AIExplain follow-up input missing normal q close keymap")
 assert(vim.fn.maparg("<C-q>", "i", false, true).buffer == 1, "AIExplain floating output missing insert ctrl-q close keymap")
-require("ai.popup").close()
+assert(vim.fn.maparg("<CR>", "i", false, true).buffer == 1, "AIExplain follow-up input missing send keymap")
+local followup_messages
+client.chat = function(messages, _, cb)
+  followup_messages = messages
+  cb(nil, "follow ok")
+end
+vim.api.nvim_buf_set_lines(explain_input_bufnr, 0, -1, false, { "why?" })
+vim.api.nvim_exec_autocmds("TextChanged", { buffer = explain_input_bufnr })
+assert(#vim.api.nvim_buf_get_extmarks(explain_input_bufnr, response_session.placeholder_ns, 0, -1, {}) == 0, "AIExplain follow-up placeholder did not clear")
+response_session.send()
+assert(vim.wait(5000, function()
+  return followup_messages ~= nil
+end), "timed out waiting for AIExplain follow-up")
+local saw_initial_reply = false
+local saw_followup_question = false
+for _, message in ipairs(followup_messages) do
+  if message.role == "assistant" and message.content == "explain ok" then
+    saw_initial_reply = true
+  elseif message.role == "user" and message.content == "why?" then
+    saw_followup_question = true
+  end
+end
+assert(saw_initial_reply, "AIExplain follow-up did not include initial assistant reply")
+assert(saw_followup_question, "AIExplain follow-up did not include user question")
+assert(table.concat(vim.api.nvim_buf_get_lines(explain_float_bufnr, 0, -1, false), "\n"):match("follow ok"), "AIExplain follow-up did not render response")
+local input_q_map = vim.fn.maparg("q", "n", false, true)
+assert(type(input_q_map.callback) == "function", "AIExplain follow-up q keymap is not callable")
+input_q_map.callback()
 assert(not vim.api.nvim_win_is_valid(explain_float_winid), "AIExplain popup close did not close window")
+assert(not vim.api.nvim_win_is_valid(explain_input_winid), "AIExplain popup close did not close input window")
 assert(vim.api.nvim_buf_is_valid(explain_float_bufnr), "AIExplain close wiped the popup buffer")
 if vim.api.nvim_win_is_valid(explain_source_winid) then
   vim.api.nvim_set_current_win(explain_source_winid)
@@ -643,7 +681,8 @@ assert(find_bug_prompt:match("Do not report style"), "AIFindBug prompt is not st
 assert(find_bug_prompt:match("Diagnostics in selected range:"), "AIFindBug did not include selected diagnostics")
 assert(find_bug_prompt:match("possible nil access"), "AIFindBug did not include diagnostic message")
 assert(find_bug_prompt:match("Language context:"), "AIFindBug did not include language context")
-require("ai.popup").close()
+assert(vim.api.nvim_win_is_valid(response_session.input_winid), "AIFindBug did not keep follow-up input open")
+response_session.close()
 vim.diagnostic.reset(find_bug_ns, tool_buf)
 if vim.api.nvim_win_is_valid(explain_source_winid) then
   vim.api.nvim_set_current_win(explain_source_winid)
@@ -661,11 +700,12 @@ assert(vim.wait(5000, function()
   return buffer_prompt ~= nil
 end), "timed out waiting for AIBuffer prompt")
 assert(buffer_prompt:match("Answer using the current buffer"), "AIBuffer used the wrong prompt")
-local buffer_float_winid = vim.api.nvim_get_current_win()
+local buffer_float_winid = response_session.output_winid
 assert(vim.api.nvim_win_get_config(buffer_float_winid).relative == "editor", "AIBuffer did not render in a floating window")
-assert(vim.api.nvim_get_current_buf() == explain_float_bufnr, "AIBuffer did not reuse the popup buffer")
-assert(table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n"):match("buffer ok"), "AIBuffer did not render provider response")
-vim.api.nvim_win_close(buffer_float_winid, true)
+assert(response_session.output_bufnr == explain_float_bufnr, "AIBuffer did not reuse the result session output buffer")
+assert(vim.api.nvim_win_is_valid(response_session.input_winid), "AIBuffer did not keep follow-up input open")
+assert(table.concat(vim.api.nvim_buf_get_lines(response_session.output_bufnr, 0, -1, false), "\n"):match("buffer ok"), "AIBuffer did not render provider response")
+response_session.close()
 if vim.api.nvim_win_is_valid(explain_source_winid) then
   vim.api.nvim_set_current_win(explain_source_winid)
 end
