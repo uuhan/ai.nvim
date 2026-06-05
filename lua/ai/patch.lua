@@ -142,6 +142,34 @@ local function clamp_cursors(bufnr)
   end
 end
 
+local function save_buffer_views(bufnr)
+  local views = {}
+  for _, winid in ipairs(vim.fn.win_findbuf(bufnr)) do
+    if vim.api.nvim_win_is_valid(winid) then
+      local ok, view = pcall(vim.api.nvim_win_call, winid, function()
+        return vim.fn.winsaveview()
+      end)
+      if ok then
+        table.insert(views, { winid = winid, view = view })
+      end
+    end
+  end
+  return views
+end
+
+local function restore_buffer_views(views, bufnr)
+  local line_count = math.max(1, vim.api.nvim_buf_line_count(bufnr))
+  for _, saved in ipairs(views) do
+    if vim.api.nvim_win_is_valid(saved.winid) then
+      saved.view.lnum = math.min(saved.view.lnum or 1, line_count)
+      saved.view.topline = math.min(saved.view.topline or 1, line_count)
+      pcall(vim.api.nvim_win_call, saved.winid, function()
+        vim.fn.winrestview(saved.view)
+      end)
+    end
+  end
+end
+
 local function strip_patch_path(raw)
   if not raw or raw == "" then
     return nil
@@ -199,6 +227,28 @@ local function replace_slice(lines, start_index, remove_count, replacement)
     table.insert(out, lines[index])
   end
   return out
+end
+
+local function find_matching_slice(lines, needle, preferred_start)
+  if #needle == 0 or #lines < #needle then
+    return nil, 0
+  end
+
+  local best_start
+  local best_distance
+  local matches = 0
+  for start_index = 0, #lines - #needle do
+    if same_lines(slice(lines, start_index, #needle), needle) then
+      matches = matches + 1
+      local distance = math.abs(start_index - preferred_start)
+      if not best_distance or distance < best_distance then
+        best_start = start_index
+        best_distance = distance
+      end
+    end
+  end
+
+  return best_start, matches
 end
 
 local function add_hunk_line(file, line)
@@ -331,10 +381,13 @@ local function apply_file(root, file)
   end
 
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local clear_empty_new_file = false
   if file.old_path == "/dev/null" and #lines == 1 and lines[1] == "" and vim.fn.filereadable(path) ~= 1 then
     lines = {}
+    clear_empty_new_file = true
   end
 
+  local operations = {}
   local offset = 0
   for _, hunk in ipairs(file.hunks) do
     local old_lines, new_lines, hunk_err = hunk_lines(hunk)
@@ -346,18 +399,48 @@ local function apply_file(root, file)
     start_index = math.max(0, start_index)
     local current = slice(lines, start_index, #old_lines)
     if not same_lines(current, old_lines) then
-      return nil, ("Patch context mismatch in %s at line %d."):format(vim.fn.fnamemodify(path, ":."), start_index + 1)
+      local relocated_start, matches = find_matching_slice(lines, old_lines, start_index)
+      if not relocated_start then
+        return nil, ("Patch context mismatch in %s at line %d."):format(vim.fn.fnamemodify(path, ":."), start_index + 1)
+      end
+      if matches > 1 and #old_lines < 2 then
+        return nil,
+          ("Patch context mismatch in %s at line %d; found %d possible matches."):format(
+            vim.fn.fnamemodify(path, ":."),
+            start_index + 1,
+            matches
+          )
+      end
+      start_index = relocated_start
     end
 
+    table.insert(operations, {
+      start_index = start_index,
+      remove_count = #old_lines,
+      replacement = new_lines,
+    })
     lines = replace_slice(lines, start_index, #old_lines, new_lines)
     offset = offset + #new_lines - #old_lines
   end
 
   local modifiable = vim.bo[bufnr].modifiable
+  local views = save_buffer_views(bufnr)
   vim.bo[bufnr].modifiable = true
-  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+  local changed = false
+  if clear_empty_new_file then
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {})
+    changed = true
+  end
+  for _, operation in ipairs(operations) do
+    if changed then
+      pcall(vim.cmd, "undojoin")
+    end
+    vim.api.nvim_buf_set_lines(bufnr, operation.start_index, operation.start_index + operation.remove_count, false, operation.replacement)
+    changed = true
+  end
   vim.bo[bufnr].modifiable = modifiable
   clamp_cursors(bufnr)
+  restore_buffer_views(views, bufnr)
   return bufnr, nil
 end
 

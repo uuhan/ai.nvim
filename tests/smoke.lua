@@ -1352,6 +1352,65 @@ end), "timed out waiting for wrong-count patch apply")
 assert(not wrong_count_err, wrong_count_err)
 assert(vim.api.nvim_buf_get_lines(wrong_count_buf, 0, 1, false)[1] == "local wrong = 2", "buffer patch apply rejected wrong hunk counts")
 
+vim.fn.writefile({ "local before = 1", "local keep = true", "local target = 1", "local after = 1" }, tmp .. "/relocate.lua")
+local relocate_buf = vim.api.nvim_create_buf(true, false)
+vim.api.nvim_buf_set_name(relocate_buf, tmp .. "/relocate.lua")
+vim.api.nvim_buf_set_lines(relocate_buf, 0, -1, false, { "local before = 1", "local keep = true", "local target = 1", "local after = 1" })
+vim.bo[relocate_buf].modified = false
+local relocate_done = false
+local relocate_err
+patch.apply([[
+diff --git a/relocate.lua b/relocate.lua
+--- a/relocate.lua
++++ b/relocate.lua
+@@ -99 +99 @@
+-local target = 1
++local target = 2
+]], function(err)
+  relocate_err = err
+  relocate_done = true
+end, { cwd = tmp })
+assert(vim.wait(5000, function()
+  return relocate_done
+end), "timed out waiting for relocated patch apply")
+assert(not relocate_err, relocate_err)
+assert(vim.api.nvim_buf_get_lines(relocate_buf, 2, 3, false)[1] == "local target = 2", "buffer patch apply did not relocate shifted hunk")
+
+local undo_lines = {}
+for index = 1, 120 do
+  undo_lines[index] = ("line %03d"):format(index)
+end
+vim.fn.writefile(undo_lines, tmp .. "/undo.lua")
+local undo_buf = vim.api.nvim_create_buf(true, false)
+vim.api.nvim_set_current_buf(undo_buf)
+vim.api.nvim_buf_set_name(undo_buf, tmp .. "/undo.lua")
+vim.bo[undo_buf].undolevels = -1
+vim.api.nvim_buf_set_lines(undo_buf, 0, -1, false, undo_lines)
+vim.bo[undo_buf].undolevels = 1000
+vim.bo[undo_buf].modified = false
+vim.api.nvim_win_set_cursor(0, { 100, 0 })
+local undo_done = false
+local undo_err
+patch.apply([[
+diff --git a/undo.lua b/undo.lua
+--- a/undo.lua
++++ b/undo.lua
+@@ -100 +100 @@
+-line 100
++line 100 patched
+]], function(err)
+  undo_err = err
+  undo_done = true
+end, { cwd = tmp })
+assert(vim.wait(5000, function()
+  return undo_done
+end), "timed out waiting for undo patch apply")
+assert(not undo_err, undo_err)
+assert(vim.api.nvim_buf_get_lines(undo_buf, 99, 100, false)[1] == "line 100 patched", "buffer patch apply did not update undo target")
+vim.cmd("undo")
+assert(vim.api.nvim_buf_get_lines(undo_buf, 99, 100, false)[1] == "line 100", "buffer patch undo did not restore target")
+assert(vim.api.nvim_win_get_cursor(0)[1] >= 95, "buffer patch undo moved cursor too far from edited line")
+
 local runner = require("ai.runner")
 runner.preview("git reset --hard", { cwd = tmp })
 local blocked_done = false
