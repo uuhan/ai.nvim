@@ -27,7 +27,7 @@ end
 
 local function set_scratch_options(bufnr, filetype)
   vim.bo[bufnr].buftype = "nofile"
-  vim.bo[bufnr].bufhidden = "wipe"
+  vim.bo[bufnr].bufhidden = "hide"
   vim.bo[bufnr].swapfile = false
   vim.bo[bufnr].modifiable = true
   vim.bo[bufnr].filetype = filetype or config.get().ui.filetype
@@ -61,7 +61,6 @@ function M.close()
     pcall(vim.api.nvim_win_close, M.winid, true)
   end
   M.winid = nil
-  M.bufnr = nil
 end
 
 local function map_keys(bufnr)
@@ -99,7 +98,7 @@ end
 function M.open(title, text, filetype)
   M.close()
 
-  local bufnr = vim.api.nvim_create_buf(false, true)
+  local bufnr = valid_buffer(M.bufnr) and M.bufnr or vim.api.nvim_create_buf(false, true)
   set_scratch_options(bufnr, filetype)
   pcall(vim.api.nvim_buf_set_name, bufnr, "ai://" .. title)
 

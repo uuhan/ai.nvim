@@ -476,10 +476,12 @@ assert(explain_prompt:match("hover docs"), "AIExplain did not include symbol hov
 assert(explain_prompt:match("Current file symbols"), "AIExplain did not include document symbols")
 assert(request_params_by_method["textDocument/hover"].position.character == 6, "AIExplain used the wrong hover column")
 local explain_float_winid = vim.api.nvim_get_current_win()
+local explain_float_bufnr = vim.api.nvim_get_current_buf()
 assert(vim.api.nvim_win_get_config(explain_float_winid).relative == "editor", "AIExplain did not render in a floating window")
 assert(vim.bo[vim.api.nvim_get_current_buf()].filetype == "markdown", "AIExplain floating output is not markdown")
 assert(vim.fn.maparg("<Esc>", "n", false, true).buffer == 1, "AIExplain floating output missing close keymap")
 vim.api.nvim_win_close(explain_float_winid, true)
+assert(vim.api.nvim_buf_is_valid(explain_float_bufnr), "AIExplain close wiped the popup buffer")
 if vim.api.nvim_win_is_valid(explain_source_winid) then
   vim.api.nvim_set_current_win(explain_source_winid)
 end
@@ -498,6 +500,7 @@ end), "timed out waiting for AIBuffer prompt")
 assert(buffer_prompt:match("Answer using the current buffer"), "AIBuffer used the wrong prompt")
 local buffer_float_winid = vim.api.nvim_get_current_win()
 assert(vim.api.nvim_win_get_config(buffer_float_winid).relative == "editor", "AIBuffer did not render in a floating window")
+assert(vim.api.nvim_get_current_buf() == explain_float_bufnr, "AIBuffer did not reuse the popup buffer")
 assert(table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n"):match("buffer ok"), "AIBuffer did not render provider response")
 vim.api.nvim_win_close(buffer_float_winid, true)
 if vim.api.nvim_win_is_valid(explain_source_winid) then
