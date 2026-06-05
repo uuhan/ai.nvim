@@ -8,6 +8,14 @@ local tools = require("ai.tools")
 local ui = require("ai.ui")
 
 local M = {}
+local rel_path
+
+local severity_names = {
+  [vim.diagnostic.severity.ERROR] = "ERROR",
+  [vim.diagnostic.severity.WARN] = "WARN",
+  [vim.diagnostic.severity.INFO] = "INFO",
+  [vim.diagnostic.severity.HINT] = "HINT",
+}
 
 local function system_prompt()
   local rules = context.rules(0)
@@ -74,8 +82,8 @@ local function request_output(title, req_messages, opts, bufnr, on_success)
   end)
 end
 
-local function request_patch(title, req_messages, bufnr)
-  local cwd = context.root(0)
+local function request_patch(title, req_messages, bufnr, cwd)
+  cwd = cwd or context.root(0)
   bufnr = bufnr or ui.open_output(title, "Requesting AI patch...")
   ui.set_output(bufnr, title, "Requesting AI patch...")
   client.chat(req_messages, {}, function(err, text)
@@ -92,9 +100,8 @@ local function request_patch(title, req_messages, bufnr)
   end)
 end
 
-local function selection_prompt(cmd, instruction)
-  local sel = context.selection_context(cmd)
-  return sel, table.concat({
+local function build_selection_prompt(sel, instruction, semantic_context)
+  local lines = {
     instruction,
     "",
     ("File: %s"):format(sel.path ~= "" and sel.path or "[No Name]"),
@@ -104,38 +111,287 @@ local function selection_prompt(cmd, instruction)
     "```" .. (sel.filetype ~= "" and sel.filetype or "text"),
     sel.text,
     "```",
-  }, "\n")
+  }
+
+  if semantic_context and semantic_context ~= "" then
+    vim.list_extend(lines, {
+      "",
+      "Language context:",
+      semantic_context,
+    })
+  end
+
+  return table.concat(lines, "\n")
+end
+
+local function run_context_tool(name, args, cb)
+  tools.run(name, args or {}, function(err, result)
+    if err then
+      cb(nil)
+      return
+    end
+    cb(result)
+  end)
+end
+
+local function format_location_items(result, max_items, root)
+  if type(result) ~= "table" or result.available == false or type(result.items) ~= "table" or vim.tbl_isempty(result.items) then
+    return nil
+  end
+
+  local lines = {}
+  for index, item in ipairs(result.items) do
+    if max_items and index > max_items then
+      table.insert(lines, "[truncated]")
+      break
+    end
+    table.insert(lines, ("%s:%s:%s"):format(item.path ~= "" and rel_path(item.path, root) or "[No Name]", item.lnum or 0, item.col or 0))
+    if item.snippet and item.snippet.text and item.snippet.text ~= "" then
+      table.insert(lines, "```text")
+      table.insert(lines, item.snippet.text)
+      table.insert(lines, "```")
+    end
+  end
+  return table.concat(lines, "\n")
+end
+
+local function format_symbols(result, max_items, root)
+  if type(result) ~= "table" or result.available == false or type(result.items) ~= "table" or vim.tbl_isempty(result.items) then
+    return nil
+  end
+
+  local lines = {}
+  for index, item in ipairs(result.items) do
+    if max_items and index > max_items then
+      table.insert(lines, "[truncated]")
+      break
+    end
+    local indent = string.rep("  ", tonumber(item.depth) or 0)
+    local location = item.lnum and (" " .. rel_path(item.path or "", root) .. ":" .. item.lnum) or ""
+    table.insert(lines, ("%s- %s `%s`%s"):format(indent, item.kind ~= "" and item.kind or "Symbol", item.name or "", location))
+  end
+  return table.concat(lines, "\n")
+end
+
+local function diagnostics_for_range(sel)
+  local bufnr = sel.bufnr or 0
+  local root = sel.root or context.root(bufnr)
+  local diagnostics = {}
+  for _, diagnostic in ipairs(vim.diagnostic.get(bufnr)) do
+    local lnum = (diagnostic.lnum or 0) + 1
+    if lnum >= sel.line1 and lnum <= sel.line2 then
+      table.insert(diagnostics, ("%s:%s:%s [%s] %s"):format(
+        sel.path ~= "" and rel_path(sel.path, root) or "[No Name]",
+        lnum,
+        (diagnostic.col or 0) + 1,
+        severity_names[diagnostic.severity] or tostring(diagnostic.severity or ""),
+        diagnostic.message or ""
+      ))
+    end
+  end
+  return table.concat(diagnostics, "\n")
+end
+
+local function format_code_actions(result, max_items)
+  if type(result) ~= "table" or result.available == false or type(result.items) ~= "table" or vim.tbl_isempty(result.items) then
+    return nil
+  end
+
+  local lines = {}
+  for index, item in ipairs(result.items) do
+    if max_items and index > max_items then
+      table.insert(lines, "[truncated]")
+      break
+    end
+    local suffix = item.kind and item.kind ~= "" and (" (" .. item.kind .. ")") or ""
+    table.insert(lines, ("- %s%s"):format(item.title or "", suffix))
+  end
+  return table.concat(lines, "\n")
+end
+
+local function collect_selection_language_context(sel, opts, cb)
+  opts = opts or {}
+  local sections = {}
+  local tasks = {}
+  local line = tonumber(sel.cursor_line) or sel.line1
+  local column = tonumber(sel.column) or 1
+  local start_column = tonumber(sel.start_column) or 1
+  local end_column = tonumber(sel.end_column) or start_column
+  local root = sel.root or context.root(sel.bufnr or 0)
+  local common = {
+    bufnr = sel.bufnr,
+    line = line,
+    column = column,
+  }
+
+  if opts.hover then
+    table.insert(tasks, function(done)
+      run_context_tool("nvim_symbol_hover", vim.tbl_extend("force", common, { max_chars = 1800 }), function(result)
+        if result and result.available ~= false and result.text and result.text ~= "" then
+          table.insert(sections, "Symbol documentation:\n" .. result.text)
+        end
+        done()
+      end)
+    end)
+  end
+
+  if opts.definition then
+    table.insert(tasks, function(done)
+      run_context_tool("nvim_symbol_definition", vim.tbl_extend("force", common, {
+        max_items = 3,
+        context_lines = 2,
+        max_chars = 1200,
+      }), function(result)
+        local text = format_location_items(result, 3, root)
+        if text then
+          table.insert(sections, "Definitions:\n" .. text)
+        end
+        done()
+      end)
+    end)
+  end
+
+  if opts.document_symbols then
+    table.insert(tasks, function(done)
+      run_context_tool("nvim_document_symbols", {
+        bufnr = sel.bufnr,
+        max_items = 40,
+      }, function(result)
+        local text = format_symbols(result, 40, root)
+        if text then
+          table.insert(sections, "Current file symbols:\n" .. text)
+        end
+        done()
+      end)
+    end)
+  end
+
+  if opts.diagnostics then
+    local diagnostics = diagnostics_for_range(sel)
+    if diagnostics ~= "" then
+      table.insert(sections, "Diagnostics in selected range:\n" .. diagnostics)
+    end
+  end
+
+  if opts.code_actions then
+    table.insert(tasks, function(done)
+      run_context_tool("nvim_code_actions", {
+        bufnr = sel.bufnr,
+        line = line,
+        column = column,
+        start_line = sel.line1,
+        start_column = start_column,
+        end_line = sel.line2,
+        end_column = end_column,
+        max_items = 12,
+      }, function(result)
+        local text = format_code_actions(result, 12)
+        if text then
+          table.insert(sections, "Available code actions:\n" .. text)
+        end
+        done()
+      end)
+    end)
+  end
+
+  local index = 1
+  local function next_task()
+    local task = tasks[index]
+    index = index + 1
+    if not task then
+      cb(table.concat(sections, "\n\n"))
+      return
+    end
+    task(next_task)
+  end
+  next_task()
+end
+
+local function collect_diagnostic_language_context(diag, cb)
+  local sel = {
+    bufnr = diag.bufnr or 0,
+    root = diag.root,
+    path = diag.path,
+    filetype = diag.filetype,
+    line1 = (diag.diagnostic.lnum or 0) + 1,
+    line2 = (diag.diagnostic.end_lnum or diag.diagnostic.lnum or 0) + 1,
+    cursor_line = (diag.diagnostic.lnum or 0) + 1,
+    column = (diag.diagnostic.col or 0) + 1,
+    start_column = (diag.diagnostic.col or 0) + 1,
+    end_column = (diag.diagnostic.end_col or diag.diagnostic.col or 0) + 1,
+    text = diag.text,
+    lines = {},
+  }
+
+  local sections = {
+    "Selected diagnostic:",
+    ("%s:%s:%s %s"):format(
+      diag.path ~= "" and rel_path(diag.path, diag.root) or "[No Name]",
+      sel.line1,
+      (diag.diagnostic.col or 0) + 1,
+      diag.diagnostic.message or ""
+    ),
+  }
+
+  collect_selection_language_context(sel, {
+    hover = true,
+    definition = true,
+    code_actions = true,
+  }, function(language_context)
+    if language_context ~= "" then
+      table.insert(sections, language_context)
+    end
+    cb(table.concat(sections, "\n\n"))
+  end)
 end
 
 local function edit_selection(cmd, instruction)
-  local sel, prompt = selection_prompt(cmd, table.concat({
+  local sel = context.selection_context(cmd)
+  local edit_instruction = table.concat({
     instruction,
     "",
     "Return only the complete replacement text for the selected range.",
     "Do not include explanation, markdown fences, or diff markers.",
-  }, "\n"))
+  }, "\n")
 
-  local bufnr = ui.open_output("edit-request", "Requesting replacement...")
-  client.chat(messages(prompt), {}, function(err, text)
-    if err then
-      ui.set_output(bufnr, "edit-error", err)
-      return
-    end
-    ui.preview_edit({
-      bufnr = sel.bufnr,
-      path = sel.path,
-      line1 = sel.line1,
-      line2 = sel.line2,
-      original_lines = sel.lines,
-      replacement = text,
-      output_bufnr = bufnr,
-    })
+  local bufnr = ui.open_output("edit-request", "Collecting language context...")
+  collect_selection_language_context(sel, {
+    hover = true,
+    definition = true,
+    diagnostics = true,
+    code_actions = true,
+  }, function(language_context)
+    local prompt = build_selection_prompt(sel, edit_instruction, language_context)
+    ui.set_output(bufnr, "edit-request", "Requesting replacement...")
+    client.chat(messages(prompt), {}, function(err, text)
+      if err then
+        ui.set_output(bufnr, "edit-error", err)
+        return
+      end
+      ui.preview_edit({
+        bufnr = sel.bufnr,
+        path = sel.path,
+        line1 = sel.line1,
+        line2 = sel.line2,
+        original_lines = sel.lines,
+        replacement = text,
+        output_bufnr = bufnr,
+      })
+    end)
   end)
 end
 
 local function ask_selection(cmd, instruction, title)
-  local _, prompt = selection_prompt(cmd, instruction)
-  request_output(title, messages(prompt))
+  local sel = context.selection_context(cmd)
+  local bufnr = ui.open_output(title, "Collecting language context...")
+  collect_selection_language_context(sel, {
+    hover = true,
+    definition = true,
+    document_symbols = true,
+  }, function(language_context)
+    local prompt = build_selection_prompt(sel, instruction, language_context)
+    request_output(title, messages(prompt), nil, bufnr)
+  end)
 end
 
 local function user_prompt(cmd, fallback)
@@ -146,8 +402,8 @@ local function user_prompt(cmd, fallback)
   return args
 end
 
-local function rel_path(path)
-  local root = context.root(0)
+function rel_path(path, root)
+  root = root or context.root(0)
   if path:sub(1, #root + 1) == root .. "/" then
     return path:sub(#root + 2)
   end
@@ -237,23 +493,34 @@ function M.fix_diagnostic()
     return
   end
 
-  local prompt = table.concat({
-    "Fix the following Neovim LSP diagnostic.",
-    "Return only a unified diff that can be applied with git apply.",
-    "Use paths relative to the project root.",
-    "",
-    ("Project root: %s"):format(context.root(0)),
-    ("File: %s"):format(diag.path ~= "" and rel_path(diag.path) or "[No Name]"),
-    ("Filetype: %s"):format(diag.filetype ~= "" and diag.filetype or "unknown"),
-    ("Diagnostic: %s"):format(diag.diagnostic.message or ""),
-    ("Context lines: %d-%d"):format(diag.context_start, diag.context_end),
-    "",
-    "```" .. (diag.filetype ~= "" and diag.filetype or "text"),
-    diag.text,
-    "```",
-  }, "\n")
+  local bufnr = ui.open_output("diagnostic-fix", "Collecting language context...")
+  collect_diagnostic_language_context(diag, function(language_context)
+    local lines = {
+      "Fix the following diagnostic.",
+      "Return only a unified diff that can be applied with git apply.",
+      "Use paths relative to the project root.",
+      "",
+      ("Project root: %s"):format(diag.root or context.root(diag.bufnr or 0)),
+      ("File: %s"):format(diag.path ~= "" and rel_path(diag.path, diag.root) or "[No Name]"),
+      ("Filetype: %s"):format(diag.filetype ~= "" and diag.filetype or "unknown"),
+      ("Diagnostic: %s"):format(diag.diagnostic.message or ""),
+      ("Context lines: %d-%d"):format(diag.context_start, diag.context_end),
+      "",
+      "```" .. (diag.filetype ~= "" and diag.filetype or "text"),
+      diag.text,
+      "```",
+    }
 
-  request_patch("diagnostic-fix", messages(prompt))
+    if language_context ~= "" then
+      vim.list_extend(lines, {
+        "",
+        "Language context:",
+        language_context,
+      })
+    end
+
+    request_patch("diagnostic-fix", messages(table.concat(lines, "\n")), bufnr, diag.root or context.root(diag.bufnr or 0))
+  end)
 end
 
 function M.fix_all_diagnostics()
@@ -264,7 +531,7 @@ function M.fix_all_diagnostics()
   end
 
   local prompt = table.concat({
-    "Fix these Neovim LSP diagnostics.",
+    "Fix these diagnostics reported by the editor.",
     "Return only a unified diff that can be applied with git apply.",
     "Use paths relative to the project root.",
     "",

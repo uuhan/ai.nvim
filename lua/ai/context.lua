@@ -138,21 +138,29 @@ function M.rules(bufnr)
 end
 
 function M.selection_context(cmd)
+  local bufnr = vim.api.nvim_get_current_buf()
+  local cursor = vim.api.nvim_win_get_cursor(0)
   local line1, line2 = M.command_range(cmd)
-  local text, lines = M.range_text(0, line1, line2)
+  local text, lines = M.range_text(bufnr, line1, line2)
+  local last_line = lines[#lines] or ""
   return {
-    bufnr = 0,
-    path = vim.api.nvim_buf_get_name(0),
-    filetype = vim.bo.filetype,
+    bufnr = bufnr,
+    root = M.root(bufnr),
+    path = vim.api.nvim_buf_get_name(bufnr),
+    filetype = vim.bo[bufnr].filetype,
+    cursor_line = cursor[1],
+    column = cursor[2] + 1,
     line1 = line1,
     line2 = line2,
+    start_column = 1,
+    end_column = #last_line + 1,
     text = text,
     lines = lines,
   }
 end
 
 function M.diagnostic_context()
-  local bufnr = 0
+  local bufnr = vim.api.nvim_get_current_buf()
   local row, col = unpack(vim.api.nvim_win_get_cursor(0))
   local diagnostics = vim.diagnostic.get(bufnr, { lnum = row - 1 })
   local selected = diagnostics[1]
@@ -175,8 +183,12 @@ function M.diagnostic_context()
   local text = M.range_text(bufnr, start_line, end_line)
 
   return {
+    bufnr = bufnr,
+    root = M.root(bufnr),
     path = vim.api.nvim_buf_get_name(bufnr),
     filetype = vim.bo[bufnr].filetype,
+    cursor_line = row,
+    column = col + 1,
     diagnostic = selected,
     context_start = start_line,
     context_end = end_line,

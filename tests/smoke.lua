@@ -338,6 +338,7 @@ assert(not vim.tbl_contains(tools.names(), "nvim_lsp_clients"), "tool registry s
 local original_get_clients = vim.lsp.get_clients
 local original_buf_request_all = vim.lsp.buf_request_all
 local fake_uri = vim.uri_from_bufnr(tool_buf)
+local request_params_by_method = {}
 vim.lsp.get_clients = function()
   return {
     {
@@ -356,7 +357,8 @@ vim.lsp.get_clients = function()
     },
   }
 end
-vim.lsp.buf_request_all = function(_, method, _, cb)
+vim.lsp.buf_request_all = function(_, method, params, cb)
+  request_params_by_method[method] = params
   local result_by_method = {
     ["textDocument/hover"] = {
       contents = {
@@ -443,6 +445,79 @@ local workspace_symbols = run_tool("nvim_workspace_symbols", { query = "outer" }
 assert(workspace_symbols.available == true and workspace_symbols.items[1].name == "outer", "workspace symbols did not return item")
 local code_actions = run_tool("nvim_code_actions")
 assert(code_actions.available == true and code_actions.items[1].title == "Fix sample", "code actions did not return action title")
+
+local original_command_chat = client.chat
+local explain_prompt
+client.chat = function(messages, _, cb)
+  explain_prompt = messages[2].content
+  cb(nil, "explain ok")
+end
+vim.api.nvim_set_current_buf(tool_buf)
+vim.api.nvim_win_set_cursor(0, { 1, 6 })
+request_params_by_method = {}
+vim.cmd("AIExplain")
+assert(vim.wait(5000, function()
+  return explain_prompt ~= nil
+end), "timed out waiting for AIExplain prompt")
+assert(explain_prompt:match("Language context:"), "AIExplain did not include language context")
+assert(explain_prompt:match("hover docs"), "AIExplain did not include symbol hover")
+assert(explain_prompt:match("Current file symbols"), "AIExplain did not include document symbols")
+assert(request_params_by_method["textDocument/hover"].position.character == 6, "AIExplain used the wrong hover column")
+
+vim.api.nvim_set_current_buf(tool_buf)
+vim.api.nvim_win_set_cursor(0, { 1, 6 })
+local edit_prompt
+client.chat = function(messages, _, cb)
+  edit_prompt = messages[2].content
+  cb(nil, "local x = 2")
+end
+request_params_by_method = {}
+vim.cmd("AIEdit improve")
+assert(vim.wait(5000, function()
+  return edit_prompt ~= nil
+end), "timed out waiting for AIEdit prompt")
+assert(edit_prompt:match("Language context:"), "AIEdit did not include language context")
+assert(edit_prompt:match("Available code actions:"), "AIEdit did not include code actions")
+assert(edit_prompt:match("Fix sample"), "AIEdit did not include code action title")
+assert(request_params_by_method["textDocument/codeAction"].range.start.character == 0, "AIEdit used the wrong code action start column")
+assert(request_params_by_method["textDocument/codeAction"].range["end"].character == 8, "AIEdit used the wrong code action end column")
+
+vim.api.nvim_set_current_buf(tool_buf)
+local diagnostic_ns = vim.api.nvim_create_namespace("ai.nvim.test.diagnostic")
+vim.diagnostic.set(diagnostic_ns, tool_buf, {
+  {
+    lnum = 0,
+    col = 6,
+    end_col = 7,
+    severity = vim.diagnostic.severity.ERROR,
+    message = "sample diagnostic",
+  },
+})
+vim.api.nvim_win_set_cursor(0, { 1, 6 })
+local diagnostic_prompt
+client.chat = function(messages, _, cb)
+  diagnostic_prompt = messages[2].content
+  cb(nil, [[
+diff --git a/test.lua b/test.lua
+--- a/test.lua
++++ b/test.lua
+@@ -1 +1 @@
+-local x = 1
++local x = 2
+]])
+end
+request_params_by_method = {}
+vim.cmd("AIFixDiagnostic")
+assert(vim.wait(5000, function()
+  return diagnostic_prompt ~= nil
+end), "timed out waiting for AIFixDiagnostic prompt")
+assert(diagnostic_prompt:match("Language context:"), "AIFixDiagnostic did not include language context")
+assert(diagnostic_prompt:match("Selected diagnostic:"), "AIFixDiagnostic did not include selected diagnostic")
+assert(diagnostic_prompt:match("Available code actions:"), "AIFixDiagnostic did not include code actions")
+assert(request_params_by_method["textDocument/codeAction"].range.start.character == 6, "AIFixDiagnostic used the wrong code action start column")
+assert(request_params_by_method["textDocument/codeAction"].range["end"].character == 7, "AIFixDiagnostic used the wrong code action end column")
+vim.diagnostic.reset(diagnostic_ns, tool_buf)
+client.chat = original_command_chat
 vim.lsp.get_clients = original_get_clients
 vim.lsp.buf_request_all = original_buf_request_all
 

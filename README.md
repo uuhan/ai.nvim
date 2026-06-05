@@ -243,6 +243,9 @@ both the actual focused buffer and the target editor buffer.
 Language-aware tools serve code understanding directly: they expose hover text,
 definitions, references, symbols, and code action titles without asking the
 model to reason about language service internals.
+One-shot commands such as `:AIExplain`, `:AIEdit`, `:AIFix`, `:AIRefactor`,
+and `:AIFixDiagnostic` also collect a small amount of this semantic context
+before sending their single model request.
 
 Chat tool loop settings:
 
