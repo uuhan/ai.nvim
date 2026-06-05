@@ -4,6 +4,7 @@ local client = require("ai.client")
 local config = require("ai.config")
 local context = require("ai.context")
 local locations = require("ai.locations")
+local popup = require("ai.popup")
 local tools = require("ai.tools")
 local ui = require("ai.ui")
 
@@ -41,25 +42,49 @@ local function messages(user_content, extra_system)
   }
 end
 
+local function provider_opts(opts)
+  local out = vim.tbl_extend("force", {}, opts or {})
+  out.output = nil
+  out.filetype = nil
+  return out
+end
+
+local function open_response_output(title, text, opts)
+  opts = opts or {}
+  if opts.output == "popup" then
+    return popup.open(title, text, opts.filetype or "markdown")
+  end
+  return ui.open_output(title, text, opts.filetype)
+end
+
+local function set_response_output(bufnr, title, text, opts)
+  opts = opts or {}
+  if opts.output == "popup" then
+    return popup.set(bufnr, title, text, opts.filetype or "markdown")
+  end
+  return ui.set_output(bufnr, title, text, opts.filetype)
+end
+
 local function request_output(title, req_messages, opts, bufnr, on_success)
   opts = opts or {}
-  bufnr = bufnr or ui.open_output(title, "Requesting AI response...")
-  ui.set_output(bufnr, title, "Requesting AI response...")
+  local req_opts = provider_opts(opts)
+  bufnr = bufnr or open_response_output(title, "Requesting AI response...", opts)
+  set_response_output(bufnr, title, "Requesting AI response...", opts)
 
-  local use_stream = opts.stream
+  local use_stream = req_opts.stream
   if use_stream == nil then
     use_stream = config.get().provider.stream
   end
 
   if use_stream then
     local text = ""
-    client.chat_stream(req_messages, opts, {
+    client.chat_stream(req_messages, req_opts, {
       on_delta = function(delta)
         text = text .. delta
-        ui.set_output(bufnr, title, text)
+        set_response_output(bufnr, title, text, opts)
       end,
       on_error = function(err)
-        ui.set_output(bufnr, title .. "-error", err)
+        set_response_output(bufnr, title .. "-error", err, opts)
       end,
       on_done = function()
         if on_success then
@@ -70,12 +95,12 @@ local function request_output(title, req_messages, opts, bufnr, on_success)
     return
   end
 
-  client.chat(req_messages, opts, function(err, text)
+  client.chat(req_messages, req_opts, function(err, text)
     if err then
-      ui.set_output(bufnr, title .. "-error", err)
+      set_response_output(bufnr, title .. "-error", err, opts)
       return
     end
-    ui.set_output(bufnr, title, text)
+    set_response_output(bufnr, title, text, opts)
     if on_success then
       on_success(text, bufnr)
     end
@@ -383,14 +408,15 @@ end
 
 local function ask_selection(cmd, instruction, title)
   local sel = context.selection_context(cmd)
-  local bufnr = ui.open_output(title, "Collecting language context...")
+  local opts = { output = "popup" }
+  local bufnr = open_response_output(title, "Collecting language context...", opts)
   collect_selection_language_context(sel, {
     hover = true,
     definition = true,
     document_symbols = true,
   }, function(language_context)
     local prompt = build_selection_prompt(sel, instruction, language_context)
-    request_output(title, messages(prompt), nil, bufnr)
+    request_output(title, messages(prompt), opts, bufnr)
   end)
 end
 
@@ -463,7 +489,7 @@ function M.test(cmd)
 end
 
 function M.buffer(cmd)
-  request_output("buffer", messages(full_buffer_prompt(cmd, "Answer using the current buffer as context.")))
+  request_output("buffer", messages(full_buffer_prompt(cmd, "Answer using the current buffer as context.")), { output = "popup" })
 end
 
 function M.file(cmd)
@@ -483,7 +509,7 @@ function M.summarize_file()
     buf.text,
     "```",
   }, "\n")
-  request_output("file-summary", messages(prompt))
+  request_output("file-summary", messages(prompt), { output = "popup" })
 end
 
 function M.fix_diagnostic()
@@ -561,16 +587,17 @@ function M.fix_quickfix()
   request_patch("quickfix-fix", messages(prompt))
 end
 
-local function git_request(title, instruction, on_success)
+local function git_request(title, instruction, on_success, opts)
+  opts = opts or {}
   local root = context.root(0)
-  local bufnr = ui.open_output(title, "Reading git diff...")
+  local bufnr = open_response_output(title, "Reading git diff...", opts)
   context.git_diff(function(err, diff)
     if err then
-      ui.set_output(bufnr, title .. "-error", err)
+      set_response_output(bufnr, title .. "-error", err, opts)
       return
     end
     if diff:gsub("%s+", "") == "#gitstatus--short#gitdiff#gitdiff--cached" then
-      ui.set_output(bufnr, title, "No git changes found.")
+      set_response_output(bufnr, title, "No git changes found.", opts)
       return
     end
 
@@ -596,7 +623,7 @@ function M.review_diff()
 end
 
 function M.explain_diff()
-  git_request("diff-explain", "Explain what changed in this git diff. Keep it concise and developer-facing.")
+  git_request("diff-explain", "Explain what changed in this git diff. Keep it concise and developer-facing.", nil, { output = "popup" })
 end
 
 function M.find_bug_in_diff()
@@ -609,16 +636,17 @@ function M.find_bug_in_diff()
 end
 
 function M.commit_message()
-  git_request("commit-message", "Write a concise commit message for this diff. Return only the commit message.")
+  git_request("commit-message", "Write a concise commit message for this diff. Return only the commit message.", nil, { output = "popup" })
 end
 
 function M.project(cmd)
   local prompt = user_prompt(cmd, "Answer the question using project context.")
   local root = context.root(0)
-  local bufnr = ui.open_output("project", "Searching project context...")
+  local opts = { output = "popup" }
+  local bufnr = open_response_output("project", "Searching project context...", opts)
   context.project_context(prompt, function(err, project_context)
     if err then
-      ui.set_output(bufnr, "project-error", err)
+      set_response_output(bufnr, "project-error", err, opts)
       return
     end
     request_output("project", messages(table.concat({
@@ -630,7 +658,7 @@ function M.project(cmd)
       "",
       "Project context:",
       project_context,
-    }, "\n")), nil, bufnr)
+    }, "\n")), opts, bufnr)
   end, root)
 end
 

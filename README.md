@@ -93,6 +93,11 @@ Core editing:
 :AIReject                    " clear the latest AI edit preview
 ```
 
+Read-only one-shot commands render their response in a focused floating Markdown
+window. This includes `:AI`, `:AIExplain`, `:AITest`, `:AIBuffer`, `:AIFile`,
+`:AISummarizeFile`, `:AIProject`, `:AIExplainDiff`, and `:AICommitMessage`.
+Press `q` or `<Esc>` to close it.
+
 Buffer and project context:
 
 ```vim

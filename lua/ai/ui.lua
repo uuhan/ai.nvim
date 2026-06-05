@@ -1,6 +1,7 @@
 local config = require("ai.config")
 local context = require("ai.context")
 local patch = require("ai.patch")
+local popup = require("ai.popup")
 local runner = require("ai.runner")
 
 local M = {
@@ -115,6 +116,10 @@ function M.open_output(title, text, filetype)
 
   M.set_output(bufnr, title, text, filetype)
   return bufnr
+end
+
+function M.open_float_output(title, text, filetype)
+  return popup.open(title, text, filetype)
 end
 
 function M.set_output(bufnr, title, text, filetype)
