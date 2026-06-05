@@ -18,7 +18,6 @@ local commands = {
   "AIReject",
   "AIRun",
   "AICmd",
-  "AIShell",
   "AIGit",
   "AIAgent",
   "AIPlanNext",

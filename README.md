@@ -99,7 +99,7 @@ Core editing:
 ```
 
 Read-only one-shot commands render their response in a focused floating Markdown
-window. This includes `:AI`, `:AIExplain`, `:AITest`, `:AIBuffer`, `:AIFile`,
+window. This includes `:AI`, `:AIExplain`, `:AITest`, `:AIBuffer`,
 `:AISummarizeFile`, `:AISearchProject`, `:AIExplainDiff`, and
 `:AICommitMessage`.
 Press `q` or `<Esc>` to close it.
@@ -108,7 +108,6 @@ Buffer and project context:
 
 ```vim
 :AIBuffer {prompt}
-:AIFile {prompt}
 :AISummarizeFile
 :AISearchProject {question}
 ```
@@ -129,7 +128,6 @@ Shell commands:
 
 ```vim
 :AICmd {task}                " generate a shell command for review
-:AIShell {task}              " alias for :AICmd
 :AIGit {task}                " generate a git command
 :AIRun                       " run the latest generated command
 ```

@@ -533,10 +533,6 @@ function M.buffer(cmd)
   request_output("buffer", messages(full_buffer_prompt(cmd, "Answer using the current buffer as context.")), { output = "popup" })
 end
 
-function M.file(cmd)
-  M.buffer(cmd)
-end
-
 function M.summarize_file()
   local buf = context.buffer_context(0, config.get().project.max_context_chars)
   local prompt = table.concat({
@@ -745,10 +741,6 @@ end
 
 function M.cmd(cmd)
   command_request("command", command_prompt(cmd, "shell"))
-end
-
-function M.shell(cmd)
-  M.cmd(cmd)
 end
 
 function M.git_cmd(cmd)
@@ -1050,7 +1042,6 @@ function M.setup()
   create_command("AIEdit", M.edit)
   create_command("AITest", M.test)
   create_command("AIBuffer", M.buffer, { range = false })
-  create_command("AIFile", M.file, { range = false })
   create_command("AISummarizeFile", M.summarize_file, { nargs = 0, range = false })
   create_command("AIFixDiagnostic", M.fix_diagnostic, { nargs = 0, range = false })
   create_command("AIFixAllDiagnostics", M.fix_all_diagnostics, { nargs = 0, range = false })
@@ -1061,7 +1052,6 @@ function M.setup()
   create_command("AICommitMessage", M.commit_message, { nargs = 0, range = false })
   create_command("AISearchProject", M.search_project, { range = false })
   create_command("AICmd", M.cmd, { range = false })
-  create_command("AIShell", M.shell, { range = false })
   create_command("AIGit", M.git_cmd, { range = false })
   create_command("AIAgent", M.agent, { range = false })
   create_command("AIPlanNext", M.plan_next, { nargs = 0, range = false })
