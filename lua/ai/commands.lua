@@ -18,12 +18,44 @@ local severity_names = {
   [vim.diagnostic.severity.HINT] = "HINT",
 }
 
+local function configured_system_prompt()
+  local prompt = config.get().system_prompt
+  if type(prompt) == "function" then
+    local ok, value = pcall(prompt)
+    if not ok then
+      return ""
+    end
+    prompt = value
+  end
+
+  if type(prompt) == "table" then
+    local lines = {}
+    for _, item in ipairs(prompt) do
+      if type(item) == "string" and item ~= "" then
+        table.insert(lines, item)
+      end
+    end
+    prompt = table.concat(lines, "\n")
+  end
+
+  if type(prompt) ~= "string" then
+    return ""
+  end
+
+  return (prompt:gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
 local function system_prompt()
   local rules = context.rules(0)
+  local user_prompt = configured_system_prompt()
   local base = [[You are an AI pair programmer embedded in Neovim.
 Be concrete, minimal, and editor-aware.
 When asked to edit code, preserve behavior unless the user asks otherwise.
 Prefer small patches and explain tradeoffs only when they matter.]]
+
+  if user_prompt ~= "" then
+    base = base .. "\n\nUser system instructions:\n" .. user_prompt
+  end
 
   if rules ~= "" then
     return base .. "\n\nProject rules:\n" .. rules

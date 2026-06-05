@@ -446,9 +446,20 @@ assert(workspace_symbols.available == true and workspace_symbols.items[1].name =
 local code_actions = run_tool("nvim_code_actions")
 assert(code_actions.available == true and code_actions.items[1].title == "Fix sample", "code actions did not return action title")
 
+config.setup({
+  system_prompt = "请使用中文回复对话。",
+  provider = {
+    api_key = "",
+    stream = false,
+  },
+  chat = {
+    max_tool_model_chars = 80,
+  },
+})
 local original_command_chat = client.chat
 local explain_prompt
 client.chat = function(messages, _, cb)
+  assert(messages[1].content:match("请使用中文回复对话。"), "AIExplain did not include configured system prompt")
   explain_prompt = messages[2].content
   cb(nil, "explain ok")
 end
@@ -650,6 +661,7 @@ client.chat = function(messages, opts, cb)
   assert(type(opts.tools) == "table" and #opts.tools > 0, "AIChat did not send native tool definitions")
   assert(opts.tool_choice == "auto", "AIChat did not enable native tool choice")
   if chat_calls == 1 then
+    assert(messages[1].content:match("请使用中文回复对话。"), "AIChat did not include configured system prompt")
     assert(messages[1].content:match("Available tools"), "AIChat did not include tool registry")
     cb(nil, "我先看看当前 buffer。", nil, {
       content = "我先看看当前 buffer。",

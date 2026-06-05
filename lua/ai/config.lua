@@ -1,6 +1,7 @@
 local M = {}
 
 local defaults = {
+  system_prompt = nil,
   provider = {
     base_url = "https://api.openai.com/v1",
     endpoint = "/chat/completions",

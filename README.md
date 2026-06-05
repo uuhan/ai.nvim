@@ -61,6 +61,7 @@ return {
       { "<C-\\>", ai_pop_chat_toggle, mode = { "n", "i" }, desc = "Toggle AI popup chat" },
     },
     opts = {
+      system_prompt = "请使用中文回复对话。",
       provider = {
         base_url = os.getenv "AI_NVIM_BASE_URL" or "https://api.deepseek.com",
         api_key_env = os.getenv "AI_NVIM_API_KEY_ENV" or "DEEPSEEK_API_KEY",
@@ -256,6 +257,7 @@ Chat tool loop settings:
 
 ```lua
 require("ai").setup({
+  system_prompt = "请使用中文回复对话。",
   chat = {
     width = 80,
     input_height = 3,
@@ -274,6 +276,9 @@ require("ai").setup({
   },
 })
 ```
+
+`system_prompt` is appended to ai.nvim's built-in editor-aware system prompt and
+is used by both one-shot commands and `AIChat`.
 
 AIChat uses `render-markdown.nvim` for Markdown rendering. Install the
 `markdown` and `markdown_inline` Treesitter parsers for Markdown structure, and
