@@ -447,15 +447,16 @@ local function edit_selection(cmd, instruction)
   end)
 end
 
-local function ask_selection(cmd, instruction, title)
+local function ask_selection(cmd, instruction, title, language_opts)
   local sel = context.selection_context(cmd)
   local opts = { output = "popup" }
   local bufnr = open_response_output(title, "Collecting language context...", opts)
-  collect_selection_language_context(sel, {
+  language_opts = vim.tbl_extend("force", {
     hover = true,
     definition = true,
     document_symbols = true,
-  }, function(language_context)
+  }, language_opts or {})
+  collect_selection_language_context(sel, language_opts, function(language_context)
     local prompt = build_selection_prompt(sel, instruction, language_context)
     request_output(title, messages(prompt), opts, bufnr)
   end)
@@ -511,6 +512,16 @@ end
 
 function M.explain(cmd)
   ask_selection(cmd, "Explain the selected code clearly. Include purpose, important control flow, and edge cases.", "explain")
+end
+
+function M.find_bug(cmd)
+  ask_selection(cmd, table.concat({
+    "Look for concrete correctness bugs in the selected code.",
+    "Be strict: report only issues that can cause incorrect behavior, runtime errors, data loss, races, security problems, or broken edge cases.",
+    "Do not report style, naming, formatting, or speculative design concerns.",
+    "If no clear bug is found, say so.",
+    "Use line references when possible.",
+  }, "\n"), "find-bug", { diagnostics = true })
 end
 
 function M.refactor(cmd)
@@ -1091,6 +1102,7 @@ function M.setup()
 
   create_command("AI", M.ai)
   create_command("AIExplain", M.explain)
+  create_command("AIFindBug", M.find_bug)
   create_command("AIRefactor", M.refactor)
   create_command("AIFix", M.fix)
   create_command("AIEdit", M.edit)

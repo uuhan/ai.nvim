@@ -13,6 +13,7 @@ ai.setup({
 local commands = {
   "AI",
   "AIExplain",
+  "AIFindBug",
   "AIEdit",
   "AIApply",
   "AIReject",
@@ -80,6 +81,7 @@ vim.api.nvim_buf_set_name(tool_buf, tool_path)
 local tools = require("ai.tools")
 local client = require("ai.client")
 local config = require("ai.config")
+local context = require("ai.context")
 local stream_buffer = require("ai.stream_buffer")
 assert(#tools.list() >= 10, "tool registry is too small")
 assert(#tools.openai_tools() == #tools.list(), "OpenAI tool export size mismatch")
@@ -87,6 +89,50 @@ local editor_state_tool = tools.openai_tools()[1]
 local editor_state_schema_json = vim.json.encode(editor_state_tool["function"].parameters)
 assert(editor_state_schema_json:match([["properties":{}]]), "OpenAI tool schema did not encode empty properties as object")
 assert(tools.describe():match("nvim_current_buffer"), "tool description missing current buffer")
+
+vim.cmd("new")
+vim.api.nvim_buf_set_lines(0, 0, -1, false, {
+  "fn upgrade() {",
+  "  let service = ServiceRunner::get_service();",
+  "",
+  "  let jar = prepare_upgrade_jar();",
+  "}",
+})
+local syntax_buf = vim.api.nvim_get_current_buf()
+vim.api.nvim_win_set_cursor(0, { 2, 4 })
+local original_get_node = vim.treesitter.get_node
+local function_node = {
+  type = function()
+    return "function_item"
+  end,
+  range = function()
+    return 0, 0, 4, 1
+  end,
+  parent = function()
+    return nil
+  end,
+}
+local child_node = {
+  type = function()
+    return "identifier"
+  end,
+  range = function()
+    return 1, 6, 1, 13
+  end,
+  parent = function()
+    return function_node
+  end,
+}
+vim.treesitter.get_node = function(opts)
+  assert(opts.bufnr == syntax_buf, "selection context queried the wrong buffer")
+  return child_node
+end
+local syntax_selection = context.selection_context({ range = 0 })
+vim.treesitter.get_node = original_get_node
+assert(syntax_selection.line1 == 1 and syntax_selection.line2 == 5, "selection context did not expand to current syntax node")
+assert(syntax_selection.text:match("prepare_upgrade_jar"), "selection context only captured the first paragraph")
+vim.api.nvim_set_current_buf(tool_buf)
+vim.api.nvim_buf_delete(syntax_buf, { force = true })
 
 local fake_curl = vim.fn.tempname()
 local stream_content_payload = vim.json.encode({
@@ -341,13 +387,16 @@ config.setup({
 
 local editor_state = run_tool("nvim_editor_state")
 assert(editor_state.current_buffer.bufnr == tool_buf, "editor state current buffer mismatch")
+assert(editor_state.current_buffer.cursor_line_text == "local x = 1", "editor state current buffer missing cursor line text")
 assert(#editor_state.windows > 0, "editor state did not include windows")
 
 local current_buffer = run_tool("nvim_current_buffer")
 assert(current_buffer.bufnr == tool_buf, "current buffer tool returned wrong buffer")
+assert(current_buffer.cursor_line_text == "local x = 1", "current buffer tool missing cursor line text")
 
 local read_buffer = run_tool("nvim_read_buffer", { bufnr = tool_buf, start_line = 1, end_line = 1 })
 assert(read_buffer.text == "local x = 1", "read buffer tool returned wrong text")
+assert(read_buffer.lines[1].lnum == 1 and read_buffer.lines[1].text == "local x = 1", "read buffer tool did not return numbered lines")
 
 local read_file = run_tool("nvim_read_file", { path = "README.md", max_chars = 200 })
 assert(read_file.text:match("# ai.nvim"), "read file tool returned wrong text")
@@ -375,6 +424,7 @@ assert(not vim.tbl_contains(tools.names(), "nvim_lsp_clients"), "tool registry s
 
 local original_get_clients = vim.lsp.get_clients
 local original_buf_request_all = vim.lsp.buf_request_all
+local original_buf_request_sync = vim.lsp.buf_request_sync
 local fake_uri = vim.uri_from_bufnr(tool_buf)
 local request_params_by_method = {}
 vim.lsp.get_clients = function()
@@ -470,6 +520,44 @@ vim.lsp.buf_request_all = function(_, method, params, cb)
   }
   cb({ [1] = { result = result_by_method[method] } })
 end
+vim.lsp.buf_request_sync = function(bufnr, method)
+  assert(method == "textDocument/documentSymbol", "unexpected sync LSP method: " .. tostring(method))
+  local line_count = vim.api.nvim_buf_line_count(bufnr)
+  return {
+    [1] = {
+      result = {
+        {
+          name = "current",
+          kind = vim.lsp.protocol.SymbolKind.Function,
+          range = {
+            start = { line = 0, character = 0 },
+            ["end"] = { line = line_count - 1, character = 1 },
+          },
+          selectionRange = {
+            start = { line = 0, character = 0 },
+            ["end"] = { line = 0, character = 7 },
+          },
+        },
+      },
+    },
+  }
+end
+
+vim.cmd("new")
+vim.api.nvim_buf_set_lines(0, 0, -1, false, {
+  "fn upgrade() {",
+  "  let service = ServiceRunner::get_service();",
+  "",
+  "  let jar = prepare_upgrade_jar();",
+  "}",
+})
+local lsp_range_buf = vim.api.nvim_get_current_buf()
+vim.api.nvim_win_set_cursor(0, { 2, 4 })
+local lsp_selection = context.selection_context({ range = 0 })
+assert(lsp_selection.line1 == 1 and lsp_selection.line2 == 5, "selection context did not expand to current LSP symbol")
+assert(lsp_selection.text:match("prepare_upgrade_jar"), "selection context LSP range only captured the first paragraph")
+vim.api.nvim_set_current_buf(tool_buf)
+vim.api.nvim_buf_delete(lsp_range_buf, { force = true })
 
 local hover = run_tool("nvim_symbol_hover")
 assert(hover.available == true and hover.text:match("hover docs"), "symbol hover did not return fake hover text")
@@ -523,6 +611,40 @@ assert(vim.fn.maparg("<C-q>", "i", false, true).buffer == 1, "AIExplain floating
 require("ai.popup").close()
 assert(not vim.api.nvim_win_is_valid(explain_float_winid), "AIExplain popup close did not close window")
 assert(vim.api.nvim_buf_is_valid(explain_float_bufnr), "AIExplain close wiped the popup buffer")
+if vim.api.nvim_win_is_valid(explain_source_winid) then
+  vim.api.nvim_set_current_win(explain_source_winid)
+end
+
+local find_bug_ns = vim.api.nvim_create_namespace("ai.nvim.test.find_bug")
+vim.diagnostic.set(find_bug_ns, tool_buf, {
+  {
+    lnum = 0,
+    col = 0,
+    end_lnum = 0,
+    end_col = 5,
+    severity = vim.diagnostic.severity.WARN,
+    message = "possible nil access",
+  },
+})
+local find_bug_prompt
+client.chat = function(messages, _, cb)
+  find_bug_prompt = messages[2].content
+  cb(nil, "bug ok")
+end
+vim.api.nvim_set_current_buf(tool_buf)
+vim.api.nvim_win_set_cursor(0, { 1, 6 })
+request_params_by_method = {}
+vim.cmd("AIFindBug")
+assert(vim.wait(5000, function()
+  return find_bug_prompt ~= nil
+end), "timed out waiting for AIFindBug prompt")
+assert(find_bug_prompt:match("Look for concrete correctness bugs"), "AIFindBug used the wrong prompt")
+assert(find_bug_prompt:match("Do not report style"), "AIFindBug prompt is not strict enough")
+assert(find_bug_prompt:match("Diagnostics in selected range:"), "AIFindBug did not include selected diagnostics")
+assert(find_bug_prompt:match("possible nil access"), "AIFindBug did not include diagnostic message")
+assert(find_bug_prompt:match("Language context:"), "AIFindBug did not include language context")
+require("ai.popup").close()
+vim.diagnostic.reset(find_bug_ns, tool_buf)
 if vim.api.nvim_win_is_valid(explain_source_winid) then
   vim.api.nvim_set_current_win(explain_source_winid)
 end
@@ -604,6 +726,7 @@ vim.diagnostic.reset(diagnostic_ns, tool_buf)
 client.chat = original_command_chat
 vim.lsp.get_clients = original_get_clients
 vim.lsp.buf_request_all = original_buf_request_all
+vim.lsp.buf_request_sync = original_buf_request_sync
 
 local quickfix = run_tool("nvim_quickfix")
 assert(type(quickfix.items) == "table", "quickfix tool did not return items")
@@ -680,11 +803,14 @@ assert(chat.target_bufnr == tool_buf, "AIChat did not retain target editor buffe
 local chat_state = run_tool("nvim_editor_state")
 assert(chat_state.current_buffer.name:match("ai://chat%-input"), "editor state did not report actual focused chat buffer")
 assert(chat_state.target_buffer and chat_state.target_buffer.bufnr == tool_buf, "editor state did not report target editor buffer")
+assert(chat_state.target_buffer.cursor_line_text == "local x = 1", "editor state target buffer missing cursor line text")
 local chat_current_buffer = run_tool("nvim_current_buffer")
 assert(chat_current_buffer.bufnr == tool_buf, "current buffer tool used AIChat input instead of target buffer")
+assert(chat_current_buffer.cursor_line_text == "local x = 1", "current buffer tool target missing cursor line text")
 local chat_default_read = run_tool("nvim_read_buffer", { start_line = 1, end_line = 1 })
 assert(chat_default_read.bufnr == tool_buf, "default read buffer tool used AIChat input instead of target buffer")
 assert(chat_default_read.text == "local x = 1", "default read buffer tool read wrong target text")
+assert(chat_default_read.lines[1].lnum == 1 and chat_default_read.lines[1].text == "local x = 1", "default read buffer tool did not return numbered target lines")
 assert(render_markdown_calls > 0, "AIChat did not enable render-markdown.nvim")
 local message_pos = vim.api.nvim_win_get_position(chat.messages_winid)
 local input_pos = vim.api.nvim_win_get_position(chat.input_winid)

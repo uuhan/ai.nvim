@@ -90,6 +90,7 @@ Core editing:
 ```vim
 :AI {prompt}                 " ask about visual selection or current paragraph
 :AIExplain                   " explain selected/current code
+:AIFindBug                   " find concrete bugs in selected/current code
 :AIEdit {instruction}        " generate replacement and preview diff
 :AIRefactor                  " refactor selected/current code
 :AIFix                       " fix selected/current code
@@ -99,7 +100,7 @@ Core editing:
 ```
 
 Read-only one-shot commands render their response in a focused floating Markdown
-window. This includes `:AI`, `:AIExplain`, `:AITest`, `:AIBuffer`,
+window. This includes `:AI`, `:AIExplain`, `:AIFindBug`, `:AITest`, `:AIBuffer`,
 `:AISummarizeFile`, `:AISearchProject`, `:AIExplainDiff`, and
 `:AICommitMessage`.
 Press `q` or `<Esc>` to close it.

@@ -22,6 +22,37 @@ local function clamp(value, min_value, max_value)
   return math.max(min_value, math.min(max_value, value))
 end
 
+local code_node_types = {
+  arrow_function = true,
+  anonymous_function = true,
+  class_declaration = true,
+  class_definition = true,
+  closure_expression = true,
+  constructor_declaration = true,
+  ["function"] = true,
+  function_declaration = true,
+  function_definition = true,
+  function_expression = true,
+  function_item = true,
+  generator_function = true,
+  generator_function_declaration = true,
+  lambda = true,
+  local_function = true,
+  method_declaration = true,
+  method_definition = true,
+}
+
+local function code_symbol_kinds()
+  local kind = vim.lsp and vim.lsp.protocol and vim.lsp.protocol.SymbolKind or {}
+  return {
+    [kind.Class or 5] = true,
+    [kind.Method or 6] = true,
+    [kind.Constructor or 9] = true,
+    [kind.Function or 12] = true,
+    [kind.Struct or 23] = true,
+  }
+end
+
 local function dirname(path)
   return vim.fs.dirname(path)
 end
@@ -91,11 +122,160 @@ function M.current_paragraph_range(bufnr)
   return start_line, end_line
 end
 
-function M.command_range(cmd)
+local function lsp_supports(bufnr, method)
+  if not vim.lsp or type(vim.lsp.buf_request_sync) ~= "function" then
+    return false
+  end
+
+  local get_clients = vim.lsp.get_clients or vim.lsp.get_active_clients
+  if type(get_clients) ~= "function" then
+    return false
+  end
+
+  local ok, clients = pcall(get_clients, { bufnr = bufnr })
+  if not ok or type(clients) ~= "table" then
+    return false
+  end
+
+  for _, client in ipairs(clients) do
+    if type(client.supports_method) ~= "function" then
+      return true
+    end
+    local supported_ok, supported = pcall(function()
+      return client:supports_method(method, { bufnr = bufnr })
+    end)
+    if supported_ok and supported then
+      return true
+    end
+  end
+
+  return false
+end
+
+local function symbol_range(symbol)
+  local range = symbol.range or (symbol.location and symbol.location.range)
+  if type(range) ~= "table" or type(range.start) ~= "table" or type(range["end"]) ~= "table" then
+    return nil, nil
+  end
+  if type(range.start.line) ~= "number" or type(range["end"].line) ~= "number" then
+    return nil, nil
+  end
+  return range.start.line + 1, range["end"].line + 1
+end
+
+local function smaller_range(left, right)
+  if not left then
+    return right
+  end
+  if not right then
+    return left
+  end
+  if (right.line2 - right.line1) < (left.line2 - left.line1) then
+    return right
+  end
+  return left
+end
+
+local function find_enclosing_symbol(symbols, cursor_line, allowed_kinds, best)
+  if type(symbols) ~= "table" then
+    return best
+  end
+
+  for _, symbol in ipairs(symbols) do
+    local line1, line2 = symbol_range(symbol)
+    if line1 and line2 and cursor_line >= line1 and cursor_line <= line2 then
+      if allowed_kinds[symbol.kind] then
+        best = smaller_range(best, { line1 = line1, line2 = line2 })
+      end
+      best = find_enclosing_symbol(symbol.children, cursor_line, allowed_kinds, best)
+    end
+  end
+
+  return best
+end
+
+function M.current_lsp_symbol_range(bufnr)
+  bufnr = bufnr or 0
+  local method = "textDocument/documentSymbol"
+  if not lsp_supports(bufnr, method) then
+    return nil, nil
+  end
+
+  local ok, responses = pcall(vim.lsp.buf_request_sync, bufnr, method, {
+    textDocument = { uri = vim.uri_from_bufnr(bufnr) },
+  }, 300)
+  if not ok or type(responses) ~= "table" then
+    return nil, nil
+  end
+
+  local cursor_line = vim.api.nvim_win_get_cursor(0)[1]
+  local allowed_kinds = code_symbol_kinds()
+  local best
+  for _, response in pairs(responses) do
+    best = find_enclosing_symbol(response.result, cursor_line, allowed_kinds, best)
+  end
+
+  if not best then
+    return nil, nil
+  end
+
+  local total = vim.api.nvim_buf_line_count(bufnr)
+  return clamp(best.line1, 1, total), clamp(best.line2, 1, total)
+end
+
+function M.current_code_range(bufnr)
+  bufnr = bufnr or 0
+  if not vim.treesitter or type(vim.treesitter.get_node) ~= "function" then
+    return nil, nil
+  end
+
+  local ok, node = pcall(vim.treesitter.get_node, { bufnr = bufnr })
+  if not ok or not node then
+    return nil, nil
+  end
+
+  while node do
+    local type_ok, node_type = pcall(function()
+      return node:type()
+    end)
+    if type_ok and code_node_types[node_type] then
+      local range_ok, start_row, _, end_row = pcall(function()
+        return node:range()
+      end)
+      if range_ok and start_row and end_row then
+        local total = vim.api.nvim_buf_line_count(bufnr)
+        return clamp(start_row + 1, 1, total), clamp(end_row + 1, 1, total)
+      end
+    end
+
+    local parent_ok, parent = pcall(function()
+      return node:parent()
+    end)
+    if not parent_ok then
+      return nil, nil
+    end
+    node = parent
+  end
+
+  return nil, nil
+end
+
+function M.command_range(cmd, bufnr)
   if cmd.range and cmd.range > 0 then
     return cmd.line1, cmd.line2
   end
-  return M.current_paragraph_range(0)
+
+  local line1, line2 = M.current_lsp_symbol_range(bufnr or 0)
+  if line1 and line2 then
+    return line1, line2
+  end
+
+  line1, line2 = M.current_code_range(bufnr or 0)
+  if line1 and line2 then
+    return line1, line2
+  end
+
+  return M.current_paragraph_range(bufnr or 0)
 end
 
 function M.buffer_context(bufnr, max_chars)
@@ -140,7 +320,7 @@ end
 function M.selection_context(cmd)
   local bufnr = vim.api.nvim_get_current_buf()
   local cursor = vim.api.nvim_win_get_cursor(0)
-  local line1, line2 = M.command_range(cmd)
+  local line1, line2 = M.command_range(cmd, bufnr)
   local text, lines = M.range_text(bufnr, line1, line2)
   local last_line = lines[#lines] or ""
   return {

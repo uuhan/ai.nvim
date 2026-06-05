@@ -55,6 +55,17 @@ local function join_lines(lines)
   return table.concat(lines, "\n")
 end
 
+local function line_items(lines, start_line)
+  local items = {}
+  for index, line in ipairs(lines or {}) do
+    table.insert(items, {
+      lnum = start_line + index - 1,
+      text = line,
+    })
+  end
+  return items
+end
+
 local function split_lines(text)
   local lines = vim.split((text or ""):gsub("\r\n", "\n"), "\n", { plain = true })
   if lines[#lines] == "" then
@@ -175,6 +186,29 @@ local function cursor_for_buffer(bufnr)
   end
 
   return nil, nil
+end
+
+local function buffer_line_text(bufnr, line)
+  if not line then
+    return nil
+  end
+
+  local ok, lines = pcall(vim.api.nvim_buf_get_lines, bufnr, line - 1, line, false)
+  if not ok or not lines or not lines[1] then
+    return nil
+  end
+  return lines[1]
+end
+
+local function attach_cursor_info(info, cursor, winid)
+  if not cursor then
+    return info
+  end
+
+  info.cursor = cursor
+  info.cursor_winid = winid
+  info.cursor_line_text = buffer_line_text(info.bufnr, cursor[1])
+  return info
 end
 
 local function diagnostic_item(bufnr, diagnostic)
@@ -671,16 +705,20 @@ register({
     if target_bufnr then
       target_cursor, target_winid = cursor_for_buffer(target_bufnr)
       target_buffer = buffer_info(target_bufnr)
-      target_buffer.cursor = target_cursor
+      attach_cursor_info(target_buffer, target_cursor, target_winid)
       target_buffer.root = context.root(target_bufnr)
     end
+
+    local current_winid = vim.api.nvim_get_current_win()
+    local current_buffer = buffer_info(vim.api.nvim_get_current_buf())
+    attach_cursor_info(current_buffer, vim.api.nvim_win_get_cursor(current_winid), current_winid)
 
     return {
       cwd = vim.fn.getcwd(),
       root = target_bufnr and context.root(target_bufnr) or context.root(0),
       mode = vim.api.nvim_get_mode().mode,
-      current_winid = vim.api.nvim_get_current_win(),
-      current_buffer = buffer_info(vim.api.nvim_get_current_buf()),
+      current_winid = current_winid,
+      current_buffer = current_buffer,
       target_winid = target_winid,
       target_buffer = target_buffer,
       windows = windows,
@@ -703,7 +741,8 @@ register({
       return nil, err
     end
     local info = buffer_info(bufnr)
-    info.cursor = cursor_for_buffer(bufnr)
+    local cursor, winid = cursor_for_buffer(bufnr)
+    attach_cursor_info(info, cursor, winid)
     info.root = context.root(bufnr)
     return info
   end),
@@ -772,6 +811,7 @@ register({
     local end_line = number_arg(args, "end_line", line_count, start_line, line_count)
     local lines = vim.api.nvim_buf_get_lines(bufnr, start_line - 1, end_line, false)
     local text, truncated = limit_text(join_lines(lines), args.max_chars)
+    local displayed_lines = split_lines(text)
 
     return {
       bufnr = bufnr,
@@ -781,6 +821,7 @@ register({
       end_line = end_line,
       line_count = line_count,
       text = text,
+      lines = line_items(displayed_lines, start_line),
       truncated = truncated,
     }
   end),
