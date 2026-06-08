@@ -17,6 +17,7 @@ local commands = {
   "AIFixBug",
   "AIImplement",
   "AIEdit",
+  "AIComment",
   "AIApply",
   "AIReject",
   "AIRun",
@@ -766,6 +767,30 @@ assert(edit_prompt:match("Available code actions:"), "AIEdit did not include cod
 assert(edit_prompt:match("Fix sample"), "AIEdit did not include code action title")
 assert(request_params_by_method["textDocument/codeAction"].range.start.character == 0, "AIEdit used the wrong code action start column")
 assert(request_params_by_method["textDocument/codeAction"].range["end"].character == 8, "AIEdit used the wrong code action end column")
+ui.reject_pending()
+
+vim.api.nvim_set_current_buf(tool_buf)
+vim.api.nvim_win_set_cursor(0, { 1, 6 })
+local comment_prompt
+client.chat = function(messages, _, cb)
+  comment_prompt = messages[2].content
+  cb(nil, "-- Explain x\nlocal x = 2")
+end
+request_params_by_method = {}
+vim.cmd("AIComment use English doc comments")
+assert(vim.wait(5000, function()
+  return comment_prompt ~= nil
+end), "timed out waiting for AIComment prompt")
+assert(comment_prompt:match("Add useful comments"), "AIComment used the wrong prompt")
+assert(comment_prompt:match("Do not comment obvious syntax"), "AIComment prompt is not strict enough")
+assert(comment_prompt:match("Additional user instruction:"), "AIComment did not preserve the user instruction section")
+assert(comment_prompt:match("use English doc comments"), "AIComment dropped the user instruction")
+assert(comment_prompt:match("Language context:"), "AIComment did not include language context")
+assert(ui.pending_edit and ui.pending_edit.replacement_lines[1] == "-- Explain x", "AIComment did not create a pending edit preview")
+assert(vim.api.nvim_win_is_valid(popup.winid), "AIComment did not render in a popup window")
+assert(vim.api.nvim_buf_get_name(popup.bufnr):match("ai://edit%-preview"), "AIComment popup did not show the edit preview")
+ui.reject_pending()
+popup.close()
 
 vim.api.nvim_set_current_buf(tool_buf)
 vim.api.nvim_win_set_cursor(0, { 1, 6 })

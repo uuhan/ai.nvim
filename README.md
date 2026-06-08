@@ -98,6 +98,7 @@ Core editing:
 :AIFixBug                    " generate a concrete bug-fix preview
 :AIImplement {request}       " implement a feature as a patch preview
 :AIEdit {instruction}        " generate replacement and preview diff
+:AIComment [instruction]     " add useful comments and preview diff
 :AIRefactor                  " refactor selected/current code
 :AIFix                       " fix selected/current code
 :AITest                      " suggest tests for selected/current code

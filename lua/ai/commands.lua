@@ -443,7 +443,8 @@ local function collect_diagnostic_language_context(diag, cb)
   end)
 end
 
-local function edit_selection(cmd, instruction)
+local function edit_selection(cmd, instruction, opts)
+  opts = opts or {}
   local sel = context.selection_context(cmd)
   local edit_instruction = table.concat({
     instruction,
@@ -453,7 +454,7 @@ local function edit_selection(cmd, instruction)
     "The plugin will preview the replacement for user review before applying it.",
   }, "\n")
 
-  local bufnr = ui.open_output("edit-request", "Collecting language context...")
+  local bufnr = open_patch_output(opts.title or "edit-request", "Collecting language context...", opts)
   collect_selection_language_context(sel, {
     hover = true,
     definition = true,
@@ -461,10 +462,10 @@ local function edit_selection(cmd, instruction)
     code_actions = true,
   }, function(language_context)
     local prompt = build_selection_prompt(sel, edit_instruction, language_context)
-    ui.set_output(bufnr, "edit-request", "Requesting replacement...")
+    set_patch_output(bufnr, opts.title or "edit-request", "Requesting replacement...", opts)
     client.chat(messages(prompt), {}, function(err, text)
       if err then
-        ui.set_output(bufnr, "edit-error", err)
+        set_patch_output(bufnr, "edit-error", err, opts)
         return
       end
       ui.preview_edit({
@@ -475,6 +476,7 @@ local function edit_selection(cmd, instruction)
         original_lines = sel.lines,
         replacement = text,
         output_bufnr = bufnr,
+        output = opts.output,
       })
     end)
   end)
@@ -623,6 +625,22 @@ end
 
 function M.edit(cmd)
   edit_selection(cmd, user_prompt(cmd, "Improve this code while preserving behavior."))
+end
+
+function M.comment(cmd)
+  local extra = (cmd.args or "") ~= "" and table.concat({
+    "",
+    "Additional user instruction:",
+    cmd.args,
+  }, "\n") or ""
+  edit_selection(cmd, table.concat({
+    "Add useful comments to the selected or current code.",
+    "Prefer doc comments for public functions, methods, types, or modules when appropriate.",
+    "Add inline comments only for non-obvious intent, invariants, edge cases, or side effects.",
+    "Do not comment obvious syntax, do not restyle the code, and do not change runtime behavior.",
+    "If no comment would add value, return the original selected range unchanged.",
+    extra,
+  }, "\n"), { output = "popup", title = "comment" })
 end
 
 function M.implement(cmd)
@@ -1226,6 +1244,7 @@ function M.setup()
   create_command("AIRefactor", M.refactor)
   create_command("AIFix", M.fix)
   create_command("AIEdit", M.edit)
+  create_command("AIComment", M.comment)
   create_command("AITest", M.test)
   create_command("AIBuffer", M.buffer, { range = false })
   create_command("AISummarizeFile", M.summarize_file, { nargs = 0, range = false })

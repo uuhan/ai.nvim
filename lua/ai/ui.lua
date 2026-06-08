@@ -278,7 +278,13 @@ function M.preview_edit(opts)
   }, "\n")
 
   if opts.output_bufnr then
-    M.set_output(opts.output_bufnr, "edit-preview", text, "markdown")
+    if opts.output == "popup" then
+      popup.set(opts.output_bufnr, "edit-preview", text, "markdown")
+    else
+      M.set_output(opts.output_bufnr, "edit-preview", text, "markdown")
+    end
+  elseif opts.output == "popup" then
+    popup.open("edit-preview", text, "markdown")
   else
     M.open_output("edit-preview", text, "markdown")
   end
