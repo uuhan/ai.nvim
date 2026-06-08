@@ -794,6 +794,28 @@ popup.close()
 
 vim.api.nvim_set_current_buf(tool_buf)
 vim.api.nvim_win_set_cursor(0, { 1, 6 })
+require("ai.target").capture_current()
+popup.open("scratch", "temporary popup", "markdown")
+local comment_no_args_prompt
+client.chat = function(messages, _, cb)
+  comment_no_args_prompt = messages[2].content
+  cb(nil, "-- Explain x\nlocal x = 2")
+end
+request_params_by_method = {}
+vim.cmd("AIComment")
+assert(vim.wait(5000, function()
+  return comment_no_args_prompt ~= nil
+end), "timed out waiting for AIComment without args")
+assert(comment_no_args_prompt:match("Add useful comments"), "AIComment without args used the wrong prompt")
+assert(not comment_no_args_prompt:match("Additional user instruction:"), "AIComment without args added an empty user instruction")
+assert(comment_no_args_prompt:match(vim.pesc(tool_path)), "AIComment without args did not use the target editor buffer")
+assert(ui.pending_edit and ui.pending_edit.bufnr == tool_buf, "AIComment without args did not preview against the target buffer")
+assert(vim.api.nvim_buf_get_name(popup.bufnr):match("ai://edit%-preview"), "AIComment without args did not show the edit preview popup")
+ui.reject_pending()
+popup.close()
+
+vim.api.nvim_set_current_buf(tool_buf)
+vim.api.nvim_win_set_cursor(0, { 1, 6 })
 local implement_prompt_seen
 client.chat = function(messages, _, cb)
   assert(messages[1].content:match("Return a unified diff only"), "AIImplement did not include patch-only system instruction")

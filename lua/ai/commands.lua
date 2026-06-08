@@ -7,6 +7,7 @@ local locations = require("ai.locations")
 local popup = require("ai.popup")
 local response_session = require("ai.response_session")
 local stream_buffer = require("ai.stream_buffer")
+local target = require("ai.target")
 local tools = require("ai.tools")
 local ui = require("ai.ui")
 
@@ -443,9 +444,19 @@ local function collect_diagnostic_language_context(diag, cb)
   end)
 end
 
+local function with_target_window(fn)
+  local winid = target.resolve_window()
+  if winid and vim.api.nvim_win_is_valid(winid) then
+    return vim.api.nvim_win_call(winid, fn)
+  end
+  return fn()
+end
+
 local function edit_selection(cmd, instruction, opts)
   opts = opts or {}
-  local sel = context.selection_context(cmd)
+  local sel = with_target_window(function()
+    return context.selection_context(cmd)
+  end)
   local edit_instruction = table.concat({
     instruction,
     "",

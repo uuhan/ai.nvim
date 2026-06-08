@@ -115,6 +115,10 @@ conversation, so you can challenge a finding or ask for clarification without
 recollecting context. The response pane keeps focus in normal mode; press `i`
 to focus the follow-up input. Press `q`, `<Esc>`, or `<C-q>` to close it.
 
+`:AIComment` accepts an optional instruction. Without one, it uses the default
+commenting policy; with one, the text is treated as an extra requirement while
+the default "do not change behavior" constraints remain in force.
+
 Buffer and project context:
 
 ```vim
