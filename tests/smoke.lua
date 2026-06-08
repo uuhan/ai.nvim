@@ -79,6 +79,7 @@ vim.api.nvim_buf_set_lines(0, 0, -1, false, { "local x = 1", "print(x)" })
 local tool_buf = vim.api.nvim_get_current_buf()
 local tool_path = vim.fn.tempname() .. ".lua"
 vim.api.nvim_buf_set_name(tool_buf, tool_path)
+vim.bo[tool_buf].modified = false
 
 local tools = require("ai.tools")
 local client = require("ai.client")
@@ -405,6 +406,16 @@ assert(read_buffer.lines[1].lnum == 1 and read_buffer.lines[1].text == "local x 
 
 local read_file = run_tool("nvim_read_file", { path = "README.md", max_chars = 200 })
 assert(read_file.text:match("# ai.nvim"), "read file tool returned wrong text")
+
+local opened_file = run_tool("nvim_open_file", { path = "README.md", line = 3, col = 1 })
+assert(opened_file.path:match("README%.md$"), "open file tool returned wrong path")
+assert(opened_file.buffer.name:match("README%.md$"), "open file tool opened wrong buffer")
+assert(opened_file.buffer.cursor[1] == 3, "open file tool did not move cursor to requested line")
+assert(vim.api.nvim_get_current_buf() == opened_file.buffer.bufnr, "open file tool did not switch current buffer")
+local opened_current_buffer = run_tool("nvim_current_buffer")
+assert(opened_current_buffer.bufnr == opened_file.buffer.bufnr, "open file tool did not update target buffer")
+vim.api.nvim_set_current_buf(tool_buf)
+require("ai.target").capture_current()
 
 local buffers = run_tool("nvim_list_buffers", { listed_only = false })
 assert(buffers.total >= 1, "list buffers tool returned no buffers")

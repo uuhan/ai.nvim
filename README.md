@@ -263,6 +263,9 @@ sent back to the model is compressed separately by `chat.max_tool_model_chars`.
 When the chat input has focus, buffer-oriented tools still default to the last
 real editor buffer rather than `ai://chat-input`; `nvim_editor_state` reports
 both the actual focused buffer and the target editor buffer.
+`nvim_open_file` can open an existing project file in the current editor window,
+split, vertical split, or tab, and then make that file the target editor buffer
+for later tools.
 Language-aware tools serve code understanding directly: they expose hover text,
 definitions, references, symbols, and code action titles without asking the
 model to reason about language service internals.

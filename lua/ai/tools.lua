@@ -345,6 +345,55 @@ local function snippet_for_path(path, line, context_lines, max_chars)
   }
 end
 
+local function open_project_file(args)
+  local path, root = project_path(args.path)
+  if not path then
+    return nil, root
+  end
+  if vim.fn.filereadable(path) ~= 1 then
+    return nil, "File is not readable: " .. path
+  end
+
+  local open_mode = string_arg(args, "open_mode", "current")
+  local command_by_mode = {
+    current = "edit",
+    split = "split",
+    vsplit = "vsplit",
+    tab = "tabedit",
+  }
+  local command = command_by_mode[open_mode]
+  if not command then
+    return nil, "open_mode must be one of: current, split, vsplit, tab"
+  end
+
+  local winid = target.resolve_window()
+  if winid and vim.api.nvim_win_is_valid(winid) and open_mode ~= "tab" then
+    vim.api.nvim_set_current_win(winid)
+  end
+
+  local ok, err = pcall(vim.cmd, command .. " " .. vim.fn.fnameescape(path))
+  if not ok then
+    return nil, tostring(err)
+  end
+
+  local bufnr = vim.api.nvim_get_current_buf()
+  local line_count = math.max(1, vim.api.nvim_buf_line_count(bufnr))
+  local line = number_arg(args, "line", 1, 1, line_count)
+  local line_text = buffer_line_text(bufnr, line) or ""
+  local col = number_arg(args, "col", 1, 1, math.max(1, #line_text + 1))
+  pcall(vim.api.nvim_win_set_cursor, 0, { line, col - 1 })
+  target.capture_current()
+
+  local info = buffer_info(bufnr)
+  attach_cursor_info(info, vim.api.nvim_win_get_cursor(0), vim.api.nvim_get_current_win())
+  return {
+    root = root,
+    path = path,
+    open_mode = open_mode,
+    buffer = info,
+  }
+end
+
 local function cursor_position(args, bufnr)
   local cursor = cursor_for_buffer(bufnr)
   local line_count = math.max(1, vim.api.nvim_buf_line_count(bufnr))
@@ -906,6 +955,26 @@ register({
       text = text,
       truncated = truncated,
     }
+  end),
+})
+
+register({
+  name = "nvim_open_file",
+  mode = "editor",
+  description = "Open an existing project file in Neovim and make it the target editor buffer. It does not modify the file.",
+  input_schema = {
+    type = "object",
+    required = { "path" },
+    properties = {
+      path = { type = "string", description = "Project-relative path, or an absolute path inside the project root." },
+      line = { type = "integer", description = "1-based line to place the cursor on. Defaults to 1." },
+      col = { type = "integer", description = "1-based column to place the cursor on. Defaults to 1." },
+      open_mode = { type = "string", enum = { "current", "split", "vsplit", "tab" }, description = "How to open the file. Defaults to current." },
+    },
+    additionalProperties = false,
+  },
+  run = complete_sync(function(args)
+    return open_project_file(args)
   end),
 })
 
