@@ -56,7 +56,7 @@ for _, name in ipairs({
   assert(vim.fn.exists(":" .. name) == 0, "old plan command should not exist: " .. name)
 end
 
-local function run_tool(name, args)
+local function run_tool(name, args, opts)
   local done = false
   local tool_err
   local result
@@ -65,7 +65,7 @@ local function run_tool(name, args)
     tool_err = err
     result = value
     done = true
-  end)
+  end, opts)
 
   assert(vim.wait(5000, function()
     return done
@@ -855,8 +855,35 @@ assert(project_search.text ~= "", "project search tool returned empty text")
 local git_diff = run_tool("nvim_git_diff", { max_chars = 2000 })
 assert(git_diff.text:match("# git status %-%-short"), "git diff tool returned wrong shape")
 
-local command_preview = run_tool("nvim_preview_command", { command = "printf '%s\\n' ok" })
+local command_preview = run_tool("nvim_preview_command", { command = "printf '%s\\n' ok" }, { source = "chat" })
 assert(command_preview.status == "previewed", "command preview tool did not preview")
+assert(require("ai.runner").pending.source == "chat", "command preview tool did not record chat source")
+
+config.setup({
+  provider = {
+    api_key = "",
+    stream = false,
+  },
+  chat = {
+    max_tool_model_chars = 80,
+  },
+  safety = {
+    auto_run_commands = true,
+  },
+})
+local command_run = run_tool("nvim_preview_command", { command = "printf '%s\\n' autorun" }, { source = "chat" })
+assert(command_run.status == "ran", "command preview tool did not auto-run with safety.auto_run_commands")
+assert(command_run.output:match("autorun"), "auto-run command did not return output")
+assert(not require("ai.runner").pending, "auto-run command left a pending command")
+config.setup({
+  provider = {
+    api_key = "",
+    stream = false,
+  },
+  chat = {
+    max_tool_model_chars = 80,
+  },
+})
 
 local patch_preview = run_tool("nvim_preview_patch", {
   patch = [[

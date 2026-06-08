@@ -53,6 +53,7 @@ function M.preview(command, opts)
     command = cmd,
     cwd = opts.cwd or context.root(0),
     title = opts.title or "command",
+    source = opts.source,
   }
 
   return M.pending
@@ -96,7 +97,7 @@ function M.run(cb)
         obj.stderr or "",
       }, "\n")
       M.pending = nil
-      cb(nil, output)
+      cb(nil, output, pending)
     end)
   end)
 end

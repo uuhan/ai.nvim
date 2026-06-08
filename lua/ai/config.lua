@@ -78,6 +78,7 @@ local defaults = {
   },
   safety = {
     auto_apply_edits = false,
+    auto_run_commands = false,
     allow_dangerous_commands = false,
     blocked_command_patterns = {
       "rm%s+%-rf%s+/",

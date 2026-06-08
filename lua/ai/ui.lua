@@ -339,6 +339,7 @@ function M.preview_command(opts)
   local pending, err = runner.preview(opts.command or "", {
     title = opts.title,
     cwd = opts.cwd,
+    source = opts.source,
   })
 
   if err then
@@ -410,13 +411,19 @@ end
 
 function M.run_pending_command()
   M.notify("Running AI command...")
-  runner.run(function(err, output)
+  runner.run(function(err, output, pending)
     if err then
       M.notify(err, vim.log.levels.ERROR)
       M.open_output("command-error", err)
       return
     end
     M.open_output("command-output", output, "markdown")
+    if pending and pending.source == "chat" then
+      local ok, chat = pcall(require, "ai.chat")
+      if ok and type(chat.continue_with_command_output) == "function" then
+        chat.continue_with_command_output(output)
+      end
+    end
   end)
 end
 

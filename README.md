@@ -78,6 +78,10 @@ return {
       chat = {
         max_tool_rounds = tonumber(os.getenv "AI_NVIM_MAX_TOOL_ROUNDS" or "") or 20,
       },
+      safety = {
+        auto_apply_edits = false,
+        auto_run_commands = false,
+      },
     },
   },
 }
@@ -193,7 +197,9 @@ codex.md
   after inspecting the diff, or `:AIReject` to discard it.
 - Set `safety.auto_apply_edits = true` only if you want edit and patch previews
   to apply immediately after they are generated.
-- AI-generated shell commands are never executed automatically. Use `:AIRun` after inspecting the command.
+- AI-generated shell commands create previews by default. Use `:AIRun` after
+  inspecting the command, or set `safety.auto_run_commands = true` to let command
+  preview tools run immediately after the safety blocklist check.
 - `:AISearchProject` uses `rg` when available. It does not maintain a vector database.
 - `:AIReviewDiff` and related commands read `git diff`, `git diff --cached`, and
   `git status --short`.
@@ -255,7 +261,10 @@ By default, AIChat can call the harness tools listed by `:AITools`. Providers
 that support OpenAI-compatible `tools` receive native tool definitions; models
 that emit text JSON tool calls still work as a fallback. Tool calls and tool
 results are rendered as Markdown callouts in the conversation. Patch and command
-tools only create previews; use `:AIApply` or `:AIRun` after inspection. Tool
+tools create previews by default; use `:AIApply` or `:AIRun` after inspection.
+When `safety.auto_run_commands = true`, command preview tools execute
+immediately after the safety blocklist check and return command output to the
+model. Tool
 results show a compact summary first, with details folded by default; use normal
 Neovim fold keys such as `zo`, `zc`, and `za` to inspect or hide them. Full tool
 output stays visible in the chat up to `chat.max_tool_result_chars`; the content
@@ -296,6 +305,7 @@ require("ai").setup({
   },
   safety = {
     auto_apply_edits = false,
+    auto_run_commands = false,
   },
 })
 ```

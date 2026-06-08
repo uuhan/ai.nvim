@@ -723,8 +723,8 @@ local function preview_buffer_replace(args)
 end
 
 local function complete_sync(fn)
-  return function(args, cb)
-    local ok, result, err = pcall(fn, args or {})
+  return function(args, cb, opts)
+    local ok, result, err = pcall(fn, args or {}, opts or {})
     if not ok then
       cb(result)
       return
@@ -1609,7 +1609,7 @@ register({
 register({
   name = "nvim_preview_command",
   mode = "preview",
-  description = "Preview a shell command in ai.nvim. It does not run the command; the user must run :AIRun.",
+  description = "Preview a shell command in ai.nvim. It only runs automatically when safety.auto_run_commands is enabled; otherwise the user must run :AIRun.",
   input_schema = {
     type = "object",
     required = { "command" },
@@ -1619,30 +1619,55 @@ register({
     },
     additionalProperties = false,
   },
-  run = complete_sync(function(args)
+  run = function(args, cb, opts)
+    opts = opts or {}
     local command = string_arg(args, "command", "")
     if command == "" then
-      return nil, "command is required"
+      cb("command is required")
+      return
     end
 
     ui.preview_command({
       title = string_arg(args, "title", "tool-preview-command"),
       command = command,
       cwd = target_root(),
+      source = opts.source,
     })
 
     if not runner.pending then
-      return nil, "Command preview did not create a pending command."
+      cb("Command preview did not create a pending command.")
+      return
     end
 
-    return {
-      status = "previewed",
-      action = "command",
-      cwd = runner.pending.cwd,
-      command = runner.pending.command,
-      message = "Inspect the preview and run :AIRun to execute or :AIReject to discard.",
-    }
-  end),
+    local pending = runner.pending
+    if not (config.get().safety and config.get().safety.auto_run_commands == true) then
+      cb(nil, {
+        status = "previewed",
+        action = "command",
+        auto_run = false,
+        cwd = pending.cwd,
+        command = pending.command,
+        message = "Inspect the preview and run :AIRun to execute or :AIReject to discard.",
+      })
+      return
+    end
+
+    runner.run(function(err, output)
+      if err then
+        cb(err)
+        return
+      end
+      cb(nil, {
+        status = "ran",
+        action = "command",
+        auto_run = true,
+        cwd = pending.cwd,
+        command = pending.command,
+        output = output,
+        message = "safety.auto_run_commands is enabled; the command was executed.",
+      })
+    end)
+  end,
 })
 
 function M.list()
@@ -1698,7 +1723,7 @@ function M.render()
     "# AI harness tools",
     "",
     "These tools expose bounded Neovim/editor context to the AI harness.",
-    "Preview tools prepare an action for user review; they do not apply patches or run commands.",
+    "Preview tools prepare an action for user review by default. Safety settings can enable automatic edit application or command execution.",
   }
 
   for _, spec in ipairs(order) do
@@ -1721,7 +1746,7 @@ function M.result_text(result)
   return vim.inspect(result)
 end
 
-function M.run(name, args, cb)
+function M.run(name, args, cb, opts)
   if type(cb) ~= "function" then
     error("ai.tools.run requires a callback")
   end
@@ -1741,7 +1766,7 @@ function M.run(name, args, cb)
     cb(err, result)
   end
 
-  local ok, err = pcall(spec.run, args or {}, finish)
+  local ok, err = pcall(spec.run, args or {}, finish, opts or {})
   if not ok then
     finish(err)
   end

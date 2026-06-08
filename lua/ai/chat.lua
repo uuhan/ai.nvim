@@ -405,7 +405,7 @@ local function harness_prompt()
     "Stop calling tools once you have enough context to answer the user's request.",
     "Call at most one tool per assistant message.",
     "When the user asks you to change code, prefer nvim_preview_buffer_replace, nvim_preview_file_replace, or nvim_preview_patch instead of only describing the edit.",
-    "Do not claim that a preview tool ran a command.",
+    "Do not claim that a preview tool ran a command unless its tool result says status=ran.",
   }
 
   if config.get().safety and config.get().safety.auto_apply_edits == true then
@@ -413,7 +413,11 @@ local function harness_prompt()
   else
     table.insert(lines, "Preview edit tools only prepare pending user-reviewed edits; the user must run :AIApply.")
   end
-  table.insert(lines, "Command preview tools only prepare pending commands; the user must run :AIRun.")
+  if config.get().safety and config.get().safety.auto_run_commands == true then
+    table.insert(lines, "safety.auto_run_commands is enabled; command preview tools may run commands immediately after creating the preview.")
+  else
+    table.insert(lines, "Command preview tools only prepare pending commands; the user must run :AIRun.")
+  end
 
   if config.get().chat.native_tools ~= false then
     vim.list_extend(lines, {
@@ -777,6 +781,21 @@ function M.is_open()
   return false
 end
 
+function M.continue_with_command_output(output)
+  output = (output or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  if output == "" or M.active or not M.is_open() then
+    return false
+  end
+  M.send(table.concat({
+    "The approved shell command finished. Continue from this command output:",
+    "",
+    "```text",
+    output,
+    "```",
+  }, "\n"))
+  return true
+end
+
 function M.toggle(opts)
   opts = opts or {}
   local layout = opts.layout or "side"
@@ -979,7 +998,7 @@ function M.send(text)
         append_tool_result(call, tool_err, result)
         set_status("thinking", "tool result ready")
         execute_calls(calls, index + 1, next_tool_round + 1, done)
-      end)
+      end, { source = "chat" })
     end
 
     local request_next
