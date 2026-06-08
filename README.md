@@ -300,10 +300,21 @@ require("ai").setup({
 `system_prompt` is appended to ai.nvim's built-in editor-aware system prompt and
 is used by both one-shot commands and `AIChat`.
 
-AIChat uses `render-markdown.nvim` for Markdown rendering. Install the
-`markdown` and `markdown_inline` Treesitter parsers for Markdown structure, and
-the relevant language parser, for example `typescript`, for fenced code block
-token highlighting.
+AIChat uses `render-markdown.nvim` for Markdown rendering. It renders Markdown
+structure such as headings, lists, and fenced code block layout; syntax
+highlighting inside fenced blocks is provided by Treesitter. Install the
+`markdown` and `markdown_inline` parsers for Markdown structure, plus each
+language parser you want highlighted. For example, Rust code blocks need:
+
+```vim
+:TSInstall markdown markdown_inline rust
+```
+
+If the parsers are already installed, update them with:
+
+```vim
+:TSUpdate markdown markdown_inline rust
+```
 
 The same tool registry is available from Lua:
 
