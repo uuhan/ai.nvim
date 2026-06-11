@@ -1099,6 +1099,39 @@ function M.chat_reset()
   ui.notify("AI chat history cleared.")
 end
 
+function M.chat_resume()
+  chat_panel.open({ system_prompt = system_prompt })
+  local ok, err = chat_panel.restore("latest")
+  if not ok then
+    ui.notify(err or "No saved AI chat session.", vim.log.levels.WARN)
+  end
+end
+
+function M.chat_sessions()
+  local session = require("ai.session")
+  local items = session.list()
+  if vim.tbl_isempty(items) then
+    ui.notify("No saved AI chat sessions for this project.", vim.log.levels.WARN)
+    return
+  end
+
+  vim.ui.select(items, {
+    prompt = "AI chat sessions",
+    format_item = function(item)
+      return ("%s  (%d messages)  %s"):format(item.created or "?", item.count or 0, item.preview or "")
+    end,
+  }, function(item)
+    if not item then
+      return
+    end
+    chat_panel.open({ system_prompt = system_prompt })
+    local ok, err = chat_panel.restore(item.path)
+    if not ok then
+      ui.notify(err or "Could not restore the AI chat session.", vim.log.levels.ERROR)
+    end
+  end)
+end
+
 function M.ping()
   local provider = config.get().provider
   local started = vim.uv and vim.uv.hrtime() or vim.loop.hrtime()
@@ -1277,6 +1310,8 @@ function M.setup()
   create_command("AIPopChatToggle", M.pop_chat_toggle, { nargs = 0, range = false })
   create_command("AIChatStop", M.chat_stop, { nargs = 0, range = false })
   create_command("AIChatReset", M.chat_reset, { nargs = 0, range = false })
+  create_command("AIChatResume", M.chat_resume, { nargs = 0, range = false })
+  create_command("AIChatSessions", M.chat_sessions, { nargs = 0, range = false })
   create_command("AIPing", M.ping, { nargs = 0, range = false })
   create_command("AIApply", ui.apply_pending, { nargs = 0, range = false })
   create_command("AIRun", ui.run_pending_command, { nargs = 0, range = false })

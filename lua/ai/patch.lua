@@ -468,7 +468,7 @@ function M.apply(patch_text, cb, opts)
     table.insert(applied, bufnr)
   end
 
-  cb(nil, ("Patch applied to %d buffer(s). Save modified buffers to write files."):format(#applied))
+  cb(nil, ("Patch applied to %d buffer(s)."):format(#applied), applied)
 end
 
 return M

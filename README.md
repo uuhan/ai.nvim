@@ -80,6 +80,7 @@ return {
       },
       safety = {
         auto_apply_edits = false,
+        auto_write_edits = false,
         auto_run_commands = false,
       },
     },
@@ -169,6 +170,8 @@ Chat:
 :AIPopChatToggle             " open or hide floating chat
 :AIChatStop                  " stop the active chat request
 :AIChatReset
+:AIChatResume                " restore the most recent saved session
+:AIChatSessions              " pick a saved session to restore
 ```
 
 Harness tools:
@@ -202,10 +205,36 @@ codex.md
   after inspecting the diff, or `:AIReject` to discard it.
 - Set `safety.auto_apply_edits = true` only if you want edit and patch previews
   to apply immediately after they are generated.
+- Applied edits and patches modify buffers only. Set
+  `safety.auto_write_edits = true` to also write the modified buffers to disk
+  after a successful apply, which keeps follow-up commands such as test runs in
+  sync with the edits. Apply results always report the disk state.
+- When a preview was created by an AIChat tool call, `:AIApply` feeds the apply
+  result back into the chat and continues the conversation, so the model can
+  move on to the next step. `:AIReject` records the rejection as an editor
+  event that the model sees on your next message.
+- Only one preview (edit, patch, or command) can be pending at a time. When a
+  chat tool call creates a new preview, the tool result notes that any
+  unapplied previous preview was discarded.
+- Chat history is persisted per project as append-only JSONL files under
+  `stdpath("state")/ai.nvim/sessions` (plaintext on disk; set
+  `chat.sessions.enabled = false` to opt out, or `chat.sessions.dir` to move
+  it). `:AIChatReset` keeps the old session and starts a new file. Restore with
+  `:AIChatResume` (latest) or `:AIChatSessions` (picker); restored sessions
+  keep appending to the same file. Set `chat.sessions.resume = "latest"` to
+  restore automatically when the chat opens. The newest
+  `chat.sessions.keep` sessions are retained per project.
+- Long conversations stay lean: only the most recent
+  `chat.max_full_tool_results` tool results are sent to the model in full;
+  older ones collapse to their one-line summary. The visible chat rendering is
+  unaffected.
 - AI-generated shell commands create previews by default. Use `:AIRun` after
   inspecting the command, or set `safety.auto_run_commands = true` to let command
   preview tools run immediately after the safety blocklist check.
-- `:AISearchProject` uses `rg` when available. It does not maintain a vector database.
+- `:AISearchProject` uses `rg` when available. It does not maintain a vector
+  database. Search terms are extracted from the question with stopword
+  filtering and identifier-aware ranking, and up to three distinctive terms are
+  searched.
 - `:AIReviewDiff` and related commands read `git diff`, `git diff --cached`, and
   `git status --short`.
 - `:AIReviewDiff` and `:AIFindBugInDiff` parse `file:line` references from the
@@ -214,7 +243,8 @@ codex.md
   editor state, buffers, files, selection, diagnostics, quickfix/location lists,
   symbol hover/definition/references, document/workspace symbols, code action
   listing, git diff, project files/search, patch/command preview, and
-  buffer/file range replacement previews.
+  buffer/file range replacement previews. Buffer and file read tools prefix
+  each line with its line number so the model can reference exact ranges.
 - `:AIFixBug` uses the same reviewable replacement-preview path as `:AIEdit`.
 - `:AIImplement` collects current editor context, diagnostics, language context,
   and relevant project search context, then creates a unified diff preview.
@@ -306,10 +336,18 @@ require("ai").setup({
     max_tool_rounds = 20,
     max_tool_model_chars = 6000,
     max_tool_result_chars = 20000,
+    max_full_tool_results = 4,
     fold_tool_results = true,
+    sessions = {
+      enabled = true,
+      -- dir defaults to stdpath("state") .. "/ai.nvim/sessions"
+      resume = "manual", -- "latest" restores the last session when chat opens
+      keep = 20,
+    },
   },
   safety = {
     auto_apply_edits = false,
+    auto_write_edits = false,
     auto_run_commands = false,
   },
 })

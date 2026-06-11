@@ -1,5 +1,7 @@
 local client = require("ai.client")
 local config = require("ai.config")
+local context = require("ai.context")
+local session = require("ai.session")
 local stream_buffer = require("ai.stream_buffer")
 local target = require("ai.target")
 local tools = require("ai.tools")
@@ -55,6 +57,21 @@ local function capture_target(winid)
   end
   target.capture(winid)
   sync_target_state()
+end
+
+--- All history mutations go through here so chat persistence sees every
+--- message. The session file is created lazily on the first write.
+local function push_history(message)
+  table.insert(M.history, message)
+
+  local sessions_cfg = config.get().chat.sessions or {}
+  if sessions_cfg.enabled == false then
+    return
+  end
+  if not session.active() then
+    session.begin(context.root(M.target_bufnr or 0))
+  end
+  session.append(message)
 end
 
 local function split_lines(text)
@@ -312,7 +329,7 @@ render_history = function(extra)
 
   for _, message in ipairs(M.history) do
     if message.role == "user" then
-      table.insert(lines, "## You")
+      table.insert(lines, message.kind == "event" and "## Editor" or "## You")
     elseif message.role == "assistant" then
       if message.kind == "tool_call" then
         table.insert(lines, "## Tool")
@@ -398,15 +415,26 @@ local function harness_prompt()
     return ""
   end
 
+  local native = config.get().chat.native_tools ~= false
   local lines = {
     "AIChat has access to Neovim harness tools.",
     "Use tools when editor, project, git, diagnostics, quickfix, symbol, reference, or preview context is needed.",
     "After receiving a tool result, either call another tool or answer the user normally.",
     "Stop calling tools once you have enough context to answer the user's request.",
-    "Call at most one tool per assistant message.",
-    "When the user asks you to change code, prefer nvim_preview_buffer_replace, nvim_preview_file_replace, or nvim_preview_patch instead of only describing the edit.",
-    "Do not claim that a preview tool ran a command unless its tool result says status=ran.",
   }
+
+  if native then
+    table.insert(lines, "Tool definitions are provided through the native tools API.")
+  else
+    table.insert(lines, "Call at most one tool per assistant message.")
+  end
+
+  vim.list_extend(lines, {
+    "When the user asks you to change code, prefer nvim_preview_buffer_replace, nvim_preview_file_replace, or nvim_preview_patch instead of only describing the edit.",
+    "Only one preview (edit, patch, or command) can be pending at a time; creating a new preview discards an unapplied one.",
+    "After creating a preview, finish your reply and wait; a follow-up message will report whether the user applied or rejected it.",
+    "Do not claim that a preview tool ran a command unless its tool result says status=ran.",
+  })
 
   if config.get().safety and config.get().safety.auto_apply_edits == true then
     table.insert(lines, "safety.auto_apply_edits is enabled; edit preview tools may apply edits immediately after creating the preview.")
@@ -419,7 +447,7 @@ local function harness_prompt()
     table.insert(lines, "Command preview tools only prepare pending commands; the user must run :AIRun.")
   end
 
-  if config.get().chat.native_tools ~= false then
+  if native then
     vim.list_extend(lines, {
       "Prefer the provider's native tool/function call format.",
       "If native tool calls are unavailable, call one tool by replying with exactly one JSON object and no markdown:",
@@ -429,24 +457,21 @@ local function harness_prompt()
     vim.list_extend(lines, {
       "To call a tool, reply with exactly one JSON object and no markdown:",
       [[{"tool":"nvim_read_buffer","args":{"start_line":1,"end_line":80}}]],
+      "",
+      "Available tools:",
+      tools.describe(),
     })
   end
-
-  vim.list_extend(lines, {
-    "",
-    "Available tools:",
-    tools.describe(),
-  })
 
   return table.concat(lines, "\n")
 end
 
-local function tool_result_message(message)
+local function tool_result_message(message, body)
   local state = message.error and "failed" or "returned"
   return table.concat({
     ("Tool `%s` %s."):format(message.tool or "unknown", state),
     "",
-    message.model_content or message.content or "",
+    body or message.model_content or message.content or "",
   }, "\n")
 end
 
@@ -558,6 +583,17 @@ local function request_messages()
     { role = "system", content = system },
   }
 
+  -- Only the most recent tool results are sent in full; older ones collapse
+  -- to their one-line summary so long sessions do not flood the context.
+  local keep_full = tonumber(config.get().chat.max_full_tool_results) or 4
+  local tool_total = 0
+  for _, message in ipairs(M.history) do
+    if message.role == "tool" then
+      tool_total = tool_total + 1
+    end
+  end
+
+  local tool_seen = 0
   for _, message in ipairs(M.history) do
     if message.role == "user" or message.role == "assistant" then
       if message.kind == "tool_call" and message.native then
@@ -568,14 +604,19 @@ local function request_messages()
         table.insert(messages, { role = message.role, content = message.content })
       end
     elseif message.role == "tool" then
+      tool_seen = tool_seen + 1
+      local body = message.model_content or message.content or ""
+      if tool_total - tool_seen >= keep_full then
+        body = "[compressed] " .. (message.summary or "older tool result omitted")
+      end
       if message.native and message.tool_call_id then
         table.insert(messages, {
           role = "tool",
           tool_call_id = message.tool_call_id,
-          content = message.model_content or message.content or "",
+          content = body,
         })
       else
-        table.insert(messages, { role = "user", content = tool_result_message(message) })
+        table.insert(messages, { role = "user", content = tool_result_message(message, body) })
       end
     end
   end
@@ -714,7 +755,7 @@ local function append_tool_result(call, err, result)
   local content = err or json_encode(result)
   local display_content, display_truncated, display_chars = limit_text_info(content, display_limit())
   local model_content, model_truncated, model_chars = compact_tool_result(call, err, result)
-  table.insert(M.history, {
+  push_history({
     role = "tool",
     tool = call.tool,
     native = call.native,
@@ -781,6 +822,35 @@ function M.is_open()
   return false
 end
 
+--- Record an editor event in the history without triggering a model request.
+--- The model sees it as context on the next round.
+function M.note_editor_event(text)
+  text = (text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  if text == "" then
+    return false
+  end
+  push_history({ role = "user", kind = "event", content = text })
+  if valid_buffer(M.messages_bufnr) then
+    set_messages(render_history())
+  end
+  return true
+end
+
+--- Continue the chat loop after the user applied a pending preview.
+--- Sends immediately when the chat is open and idle; otherwise records the
+--- event so the model sees it on the next round.
+function M.continue_with_apply_result(text)
+  text = (text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  if text == "" then
+    return false
+  end
+  if M.active or not M.is_open() then
+    return M.note_editor_event(text) and false
+  end
+  M.send(text, { kind = "event" })
+  return true
+end
+
 function M.continue_with_command_output(output)
   output = (output or ""):gsub("^%s+", ""):gsub("%s+$", "")
   if output == "" or M.active or not M.is_open() then
@@ -792,7 +862,7 @@ function M.continue_with_command_output(output)
     "```text",
     output,
     "```",
-  }, "\n"))
+  }, "\n"), { kind = "event" })
   return true
 end
 
@@ -837,16 +907,20 @@ local function focus_messages()
 end
 
 local function open_side(chat_opts)
-  vim.cmd(("botright vertical %dnew"):format(chat_opts.width))
-  M.messages_winid = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_buf(M.messages_winid, M.messages_bufnr)
+  -- Open splits with the chat buffers directly; a ":new" + win_set_buf swap
+  -- would leave an orphaned unnamed buffer behind on every open.
+  M.messages_winid = vim.api.nvim_open_win(M.messages_bufnr, true, {
+    split = "right",
+    win = -1,
+    width = math.max(20, math.floor(tonumber(chat_opts.width) or 80)),
+  })
   vim.wo[M.messages_winid].winfixwidth = true
 
-  vim.api.nvim_set_current_win(M.messages_winid)
-  vim.cmd(("belowright %dnew"):format(chat_opts.input_height))
-  M.input_winid = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_buf(M.input_winid, M.input_bufnr)
-  vim.api.nvim_win_set_height(M.input_winid, chat_opts.input_height)
+  M.input_winid = vim.api.nvim_open_win(M.input_bufnr, true, {
+    split = "below",
+    win = M.messages_winid,
+    height = math.max(1, math.floor(tonumber(chat_opts.input_height) or 3)),
+  })
   vim.wo[M.input_winid].winfixheight = true
   M.layout = "side"
 end
@@ -892,7 +966,37 @@ function M.clear()
   M.history = {}
   M.status = "idle"
   M.status_detail = ""
+  session.finish()
   set_messages(render_history())
+end
+
+--- Restore a persisted session. `which` is a session file path, or
+--- "latest"/nil for the most recent session of the current project.
+--- Further messages append to the restored session file.
+function M.restore(which)
+  local root = context.root(M.target_bufnr or 0)
+  local path = which
+  if path == nil or path == "latest" then
+    local items = session.list(root)
+    if vim.tbl_isempty(items) then
+      return false, "No saved AI chat sessions for this project."
+    end
+    path = items[1].path
+  end
+
+  local meta, messages = session.load(path)
+  if not meta then
+    return false, messages
+  end
+
+  M.history = messages or {}
+  session.resume_file(path, meta.root or root)
+  M.status = "idle"
+  M.status_detail = ""
+  if valid_buffer(M.messages_bufnr) then
+    set_messages(render_history())
+  end
+  return true
 end
 
 function M.stop()
@@ -916,7 +1020,7 @@ function M.stop()
   set_status("stopped", "request cancelled")
 end
 
-function M.send(text)
+function M.send(text, send_opts)
   text = (text or input_text()):gsub("^%s+", ""):gsub("%s+$", "")
   if text == "" or M.active then
     return
@@ -927,7 +1031,7 @@ function M.send(text)
   M.active = true
   M.active_request = nil
   M.active_stream = nil
-  table.insert(M.history, { role = "user", content = text })
+  push_history({ role = "user", kind = send_opts and send_opts.kind or nil, content = text })
   reset_input()
   set_status("thinking", "waiting for model", "## Assistant\n\n...")
 
@@ -951,7 +1055,7 @@ function M.send(text)
     local function append_assistant_text(content)
       content = (content or ""):gsub("^%s+", ""):gsub("%s+$", "")
       if content ~= "" then
-        table.insert(M.history, { role = "assistant", content = content })
+        push_history({ role = "assistant", content = content })
       end
     end
 
@@ -973,7 +1077,7 @@ function M.send(text)
         return
       end
 
-      table.insert(M.history, {
+      push_history({
         role = "assistant",
         kind = "tool_call",
         tool = call.tool,
@@ -1170,7 +1274,7 @@ function M.send(text)
         clear_renderer()
         M.active_request = nil
         M.active = false
-        table.insert(M.history, { role = "assistant", content = assistant })
+        push_history({ role = "assistant", content = assistant })
         set_status("idle")
       end,
     })
@@ -1221,7 +1325,7 @@ function M.send(text)
       set_status("error", "model request failed", "## Error\n\n" .. err)
       return
     end
-    table.insert(M.history, { role = "assistant", content = response })
+    push_history({ role = "assistant", content = response })
     set_status("idle")
   end)
 end
@@ -1309,6 +1413,15 @@ function M.open(opts)
   capture_target()
   M.system_prompt = opts.system_prompt or M.system_prompt or function() return "You are an AI assistant embedded in Neovim." end
   ensure_buffers()
+
+  local sessions_cfg = config.get().chat.sessions or {}
+  if sessions_cfg.enabled ~= false
+    and sessions_cfg.resume == "latest"
+    and not M.session_resume_attempted
+    and vim.tbl_isempty(M.history) then
+    M.session_resume_attempted = true
+    pcall(M.restore, "latest")
+  end
 
   if valid_window(M.messages_winid) and valid_window(M.input_winid) then
     if M.layout ~= layout then

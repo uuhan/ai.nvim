@@ -1,5 +1,19 @@
 vim.opt.runtimepath:append(vim.fn.getcwd())
 
+-- Redirect all chat session persistence into a temp dir so test runs never
+-- write into the real stdpath("state") of the user running the suite.
+local smoke_sessions_dir = vim.fn.tempname()
+do
+  local config = require("ai.config")
+  local original_setup = config.setup
+  config.setup = function(opts)
+    opts = opts or {}
+    opts.chat = opts.chat or {}
+    opts.chat.sessions = opts.chat.sessions or { dir = smoke_sessions_dir }
+    return original_setup(opts)
+  end
+end
+
 local ai = require("ai")
 ai.setup({
   provider = {
@@ -34,6 +48,8 @@ local commands = {
   "AIPopChatToggle",
   "AIChatStop",
   "AIChatReset",
+  "AIChatResume",
+  "AIChatSessions",
   "AIPing",
   "AITools",
   "AITool",
@@ -73,6 +89,16 @@ local function run_tool(name, args, opts)
   end), "timed out waiting for tool " .. name)
   assert(not tool_err, tool_err)
   return result
+end
+
+local function count_unnamed_buffers()
+  local count = 0
+  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(bufnr) and vim.api.nvim_buf_get_name(bufnr) == "" then
+      count = count + 1
+    end
+  end
+  return count
 end
 
 vim.cmd("new")
@@ -402,11 +428,11 @@ assert(current_buffer.bufnr == tool_buf, "current buffer tool returned wrong buf
 assert(current_buffer.cursor_line_text == "local x = 1", "current buffer tool missing cursor line text")
 
 local read_buffer = run_tool("nvim_read_buffer", { bufnr = tool_buf, start_line = 1, end_line = 1 })
-assert(read_buffer.text == "local x = 1", "read buffer tool returned wrong text")
-assert(read_buffer.lines[1].lnum == 1 and read_buffer.lines[1].text == "local x = 1", "read buffer tool did not return numbered lines")
+assert(read_buffer.text == "1\tlocal x = 1", "read buffer tool did not return numbered text")
+assert(read_buffer.lines == nil, "read buffer tool should not duplicate text in a lines field")
 
 local read_file = run_tool("nvim_read_file", { path = "README.md", max_chars = 200 })
-assert(read_file.text:match("# ai.nvim"), "read file tool returned wrong text")
+assert(read_file.text:match("^1\t# ai.nvim"), "read file tool did not return numbered text")
 
 local opened_file = run_tool("nvim_open_file", { path = "README.md", line = 3, col = 1 })
 assert(opened_file.path:match("README%.md$"), "open file tool returned wrong path")
@@ -899,6 +925,18 @@ assert(#project_files.files > 0, "project files tool returned no files")
 local project_search = run_tool("nvim_project_search", { query = "AIChat", max_chars = 2000 })
 assert(project_search.text ~= "", "project search tool returned empty text")
 
+local project_context_text
+context.project_context("how does AIChat work", function(err, text)
+  assert(not err, err)
+  project_context_text = text
+end)
+assert(vim.wait(5000, function()
+  return project_context_text ~= nil
+end), "timed out waiting for project context")
+assert(project_context_text:match("# search terms\nAIChat"), "project context did not pick the distinctive search term")
+assert(not project_context_text:match("# search terms\nhow"), "project context selected a stopword as search term")
+assert(project_context_text:match("# rg results: AIChat"), "project context did not include rg results for the search term")
+
 local git_diff = run_tool("nvim_git_diff", { max_chars = 2000 })
 assert(git_diff.text:match("# git status %-%-short"), "git diff tool returned wrong shape")
 
@@ -1033,8 +1071,7 @@ assert(chat_current_buffer.bufnr == tool_buf, "current buffer tool used AIChat i
 assert(chat_current_buffer.cursor_line_text == "local x = 1", "current buffer tool target missing cursor line text")
 local chat_default_read = run_tool("nvim_read_buffer", { start_line = 1, end_line = 1 })
 assert(chat_default_read.bufnr == tool_buf, "default read buffer tool used AIChat input instead of target buffer")
-assert(chat_default_read.text == "local x = 1", "default read buffer tool read wrong target text")
-assert(chat_default_read.lines[1].lnum == 1 and chat_default_read.lines[1].text == "local x = 1", "default read buffer tool did not return numbered target lines")
+assert(chat_default_read.text == "1\tlocal x = 1", "default read buffer tool read wrong target text")
 assert(render_markdown_calls > 0, "AIChat did not enable render-markdown.nvim")
 local message_pos = vim.api.nvim_win_get_position(chat.messages_winid)
 local input_pos = vim.api.nvim_win_get_position(chat.input_winid)
@@ -1056,9 +1093,11 @@ client.chat = function(messages, opts, cb)
   assert(opts.tool_choice == "auto", "AIChat did not enable native tool choice")
   if chat_calls == 1 then
     assert(messages[1].content:match("请使用中文回复对话。"), "AIChat did not include configured system prompt")
-    assert(messages[1].content:match("Available tools"), "AIChat did not include tool registry")
+    assert(not messages[1].content:match("Available tools"), "AIChat native mode should not duplicate the tool registry text")
+    assert(messages[1].content:match("native tools API"), "AIChat native mode did not mention native tool definitions")
     assert(messages[1].content:match("nvim_preview_buffer_replace"), "AIChat did not expose preview edit tools")
     assert(messages[1].content:match(":AIApply"), "AIChat did not explain preview apply flow")
+    assert(messages[1].content:match("applied or rejected"), "AIChat did not explain the apply/reject follow-up flow")
     cb(nil, "我先看看当前 buffer。", nil, {
       content = "我先看看当前 buffer。",
       tool_calls = {
@@ -1170,7 +1209,7 @@ client.chat_stream = function(messages, opts, callbacks)
   assert(opts.tool_choice == "auto", "AIChat stream did not enable native tool choice")
 
   if stream_calls == 1 then
-    assert(messages[1].content:match("Available tools"), "AIChat stream did not include tool registry")
+    assert(not messages[1].content:match("Available tools"), "AIChat stream native mode should not duplicate the tool registry text")
     callbacks.on_reasoning_delta("stream thinking")
     callbacks.on_delta("我先")
     callbacks.on_delta("看。")
@@ -1281,6 +1320,167 @@ assert(chat.layout == "float", "AIPopChatToggle did not reopen float layout")
 assert(vim.api.nvim_get_current_win() == chat.messages_winid, "AIPopChatToggle did not focus message pane")
 assert(vim.fn.mode() == "n", "AIPopChatToggle message focus did not use normal mode")
 chat.close()
+
+vim.cmd("AIChat")
+chat.clear()
+local apply_feedback_messages
+client.chat = function(messages, _, cb)
+  apply_feedback_messages = messages
+  cb(nil, "continuing after apply")
+end
+local chat_edit_preview = run_tool("nvim_preview_buffer_replace", {
+  bufnr = tool_buf,
+  start_line = 2,
+  end_line = 2,
+  replacement = "print(x) -- checked",
+}, { source = "chat" })
+assert(chat_edit_preview.status == "previewed", "chat edit preview did not preview")
+require("ai.ui").apply_pending()
+assert(vim.wait(5000, function()
+  return apply_feedback_messages ~= nil
+end), "timed out waiting for apply feedback request")
+local apply_feedback = apply_feedback_messages[#apply_feedback_messages]
+assert(apply_feedback.role == "user" and apply_feedback.content:match("applied the edit preview"), "AIApply did not feed the apply result back to chat")
+assert(vim.wait(5000, function()
+  return not chat.active
+end), "timed out waiting for apply feedback round")
+assert(vim.api.nvim_buf_get_lines(tool_buf, 1, 2, false)[1] == "print(x) -- checked", "AIApply did not apply the chat edit")
+local rendered_apply = table.concat(vim.api.nvim_buf_get_lines(chat.messages_bufnr, 0, -1, false), "\n")
+assert(rendered_apply:match("## Editor"), "apply feedback was not rendered as an editor event")
+
+local reject_calls = 0
+client.chat = function(_, _, cb)
+  reject_calls = reject_calls + 1
+  cb(nil, "should not be requested")
+end
+local chat_reject_preview = run_tool("nvim_preview_buffer_replace", {
+  bufnr = tool_buf,
+  start_line = 1,
+  end_line = 1,
+  replacement = "local x = 9",
+}, { source = "chat" })
+assert(chat_reject_preview.status == "previewed", "chat reject preview did not preview")
+require("ai.ui").reject_pending()
+assert(reject_calls == 0, "AIReject should not trigger a model request")
+local reject_event = chat.history[#chat.history]
+assert(reject_event.kind == "event" and reject_event.content:match("rejected the pending edit"), "AIReject did not record an editor event")
+client.chat = original_chat
+chat.close()
+
+local unnamed_before_chat = count_unnamed_buffers()
+vim.cmd("AIChatToggle")
+vim.cmd("AIChatToggle")
+vim.cmd("AIChatToggle")
+vim.cmd("AIChatToggle")
+assert(count_unnamed_buffers() == unnamed_before_chat, "AIChat side layout leaked unnamed buffers")
+
+ui.open_output("reuse-leak-test", "one")
+vim.cmd("vsplit")
+local keepalive_winid = vim.api.nvim_get_current_win()
+vim.api.nvim_win_set_buf(keepalive_winid, ui.output_bufnr)
+pcall(vim.api.nvim_win_close, ui.output_winid, true)
+local unnamed_before_reuse = count_unnamed_buffers()
+ui.open_output("reuse-leak-test", "two")
+assert(count_unnamed_buffers() == unnamed_before_reuse, "output window reuse leaked an unnamed buffer")
+pcall(vim.api.nvim_win_close, ui.output_winid, true)
+pcall(vim.api.nvim_win_close, keepalive_winid, true)
+
+local session = require("ai.session")
+local persist_dir = vim.fn.tempname()
+config.setup({
+  system_prompt = "请使用中文回复对话。",
+  provider = {
+    api_key = "",
+    stream = false,
+  },
+  chat = {
+    max_tool_model_chars = 80,
+    sessions = { enabled = true, dir = persist_dir, keep = 5 },
+  },
+})
+vim.cmd("AIChat")
+chat.clear()
+client.chat = function(_, _, cb)
+  cb(nil, "persisted reply")
+end
+chat.send("persist me please")
+assert(vim.wait(5000, function()
+  return not chat.active
+end), "timed out waiting for persisted chat round")
+client.chat = original_chat
+
+local persisted = session.list()
+assert(#persisted == 1, "chat session was not persisted")
+assert(persisted[1].count == 2, "persisted session message count mismatch")
+assert(persisted[1].preview:match("persist me"), "session preview missing first user message")
+
+local saved_history_len = #chat.history
+chat.clear()
+assert(#chat.history == 0, "chat clear did not empty history")
+assert(chat.restore("latest"), "chat session restore failed")
+assert(#chat.history == saved_history_len, "restored history length mismatch")
+assert(chat.history[1].content == "persist me please", "restored history missing user message")
+assert(chat.history[#chat.history].content == "persisted reply", "restored history missing assistant reply")
+
+client.chat = function(_, _, cb)
+  cb(nil, "second reply")
+end
+chat.send("continue session")
+assert(vim.wait(5000, function()
+  return not chat.active
+end), "timed out waiting for continued session round")
+client.chat = original_chat
+persisted = session.list()
+assert(#persisted == 1, "continuing a restored session created a new file")
+assert(persisted[1].count == 4, "continued session did not append messages")
+
+chat.clear()
+for index = 1, 6 do
+  table.insert(chat.history, {
+    role = "tool",
+    native = true,
+    tool_call_id = "call_downsample_" .. index,
+    summary = "tool summary " .. index,
+    content = "full content " .. index,
+    model_content = "full model content " .. index,
+  })
+end
+local downsample_messages
+client.chat = function(messages, _, cb)
+  downsample_messages = messages
+  cb(nil, "downsample ok")
+end
+chat.send("after many tool calls")
+assert(vim.wait(5000, function()
+  return not chat.active
+end), "timed out waiting for downsample round")
+client.chat = original_chat
+local full_results = 0
+local compressed_results = 0
+for _, message in ipairs(downsample_messages) do
+  if message.role == "tool" then
+    if message.content:match("^%[compressed%]") then
+      compressed_results = compressed_results + 1
+      assert(message.content:match("tool summary"), "compressed tool result lost its summary")
+    else
+      full_results = full_results + 1
+    end
+  end
+end
+assert(full_results == 4, "downsampling did not keep the most recent tool results in full")
+assert(compressed_results == 2, "downsampling did not compress older tool results")
+chat.clear()
+chat.close()
+config.setup({
+  system_prompt = "请使用中文回复对话。",
+  provider = {
+    api_key = "",
+    stream = false,
+  },
+  chat = {
+    max_tool_model_chars = 80,
+  },
+})
 
 local target = vim.api.nvim_create_buf(true, false)
 vim.api.nvim_buf_set_lines(target, 0, -1, false, { "local x = 1", "print(x)" })
@@ -1495,6 +1695,43 @@ assert(vim.api.nvim_buf_get_lines(undo_buf, 99, 100, false)[1] == "line 100 patc
 vim.cmd("undo")
 assert(vim.api.nvim_buf_get_lines(undo_buf, 99, 100, false)[1] == "line 100", "buffer patch undo did not restore target")
 assert(vim.api.nvim_win_get_cursor(0)[1] >= 95, "buffer patch undo moved cursor too far from edited line")
+
+vim.fn.writefile({ "local autosave = 1" }, tmp .. "/autosave.lua")
+local autosave_buf = vim.fn.bufadd(tmp .. "/autosave.lua")
+vim.fn.bufload(autosave_buf)
+config.setup({
+  provider = {
+    api_key = "",
+    stream = false,
+  },
+  chat = {
+    max_tool_model_chars = 80,
+  },
+  safety = {
+    auto_apply_edits = true,
+    auto_write_edits = true,
+  },
+})
+local autosave_preview = run_tool("nvim_preview_buffer_replace", {
+  bufnr = autosave_buf,
+  start_line = 1,
+  end_line = 1,
+  replacement = "local autosave = 2",
+})
+assert(autosave_preview.status == "applied", "auto write edit preview did not apply")
+assert(autosave_preview.written == true, "auto write edit did not report written status")
+assert(not vim.bo[autosave_buf].modified, "auto write edit left the buffer modified")
+assert(vim.fn.readfile(tmp .. "/autosave.lua")[1] == "local autosave = 2", "auto write edit did not write the file to disk")
+config.setup({
+  system_prompt = "请使用中文回复对话。",
+  provider = {
+    api_key = "",
+    stream = false,
+  },
+  chat = {
+    max_tool_model_chars = 80,
+  },
+})
 
 local runner = require("ai.runner")
 runner.preview("git reset --hard", { cwd = tmp })

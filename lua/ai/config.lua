@@ -70,7 +70,14 @@ local defaults = {
     max_tool_rounds = 20,
     max_tool_model_chars = 6000,
     max_tool_result_chars = 20000,
+    max_full_tool_results = 4,
     fold_tool_results = true,
+    sessions = {
+      enabled = true,
+      -- dir defaults to stdpath("state")/ai.nvim/sessions when unset
+      resume = "manual",
+      keep = 20,
+    },
   },
   response = {
     input_title = " You ",
@@ -78,6 +85,7 @@ local defaults = {
   },
   safety = {
     auto_apply_edits = false,
+    auto_write_edits = false,
     auto_run_commands = false,
     allow_dangerous_commands = false,
     blocked_command_patterns = {

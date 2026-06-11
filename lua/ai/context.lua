@@ -477,28 +477,66 @@ function M.git_diff(cb, root_override)
   end)
 end
 
+local search_stopwords = {}
+for _, word in ipairs({
+  "the", "and", "for", "with", "this", "that", "these", "those", "from", "into",
+  "how", "what", "why", "where", "when", "which", "who", "whose",
+  "does", "did", "done", "doing",
+  "can", "could", "should", "would", "will", "shall", "may", "might", "must",
+  "are", "was", "were", "been", "being",
+  "you", "your", "our", "their", "its",
+  "have", "has", "had", "having",
+  "not", "but", "all", "any", "some", "one", "more", "most", "other",
+  "use", "used", "using", "make", "made", "work", "works", "working",
+  "please", "help", "find", "show", "tell", "explain", "about", "like", "look",
+  "code", "file", "files", "project", "function", "functions", "implement",
+}) do
+  search_stopwords[word] = true
+end
+
+local function term_score(term)
+  if search_stopwords[term:lower()] or term:match("^%d+$") then
+    return nil
+  end
+
+  local score = math.min(#term, 24)
+  if term:match("[_%./:%-]") then
+    score = score + 12
+  end
+  if term:match("%l%u") or (term:match("%u") and term:match("%l")) then
+    score = score + 8
+  end
+  return score
+end
+
 local function extract_terms(prompt)
-  local terms = {}
+  local scored = {}
   local seen = {}
+  local order = 0
 
-  local function add(term)
-    term = term:gsub("^%s+", ""):gsub("%s+$", "")
-    if #term < 3 or seen[term] then
-      return
+  for raw in prompt:gmatch("[%w_./:-]+") do
+    local term = raw:gsub("^[./:%-]+", ""):gsub("[./:%-]+$", "")
+    if #term >= 3 and not seen[term:lower()] then
+      local score = term_score(term)
+      if score then
+        seen[term:lower()] = true
+        order = order + 1
+        table.insert(scored, { term = term, score = score, order = order })
+      end
     end
-    seen[term] = true
-    table.insert(terms, term)
   end
 
-  for term in prompt:gmatch("[%w_./:-]+") do
-    add(term)
-  end
+  table.sort(scored, function(left, right)
+    if left.score ~= right.score then
+      return left.score > right.score
+    end
+    return left.order < right.order
+  end)
 
-  local word = vim.fn.expand("<cword>")
-  if word and word ~= "" then
-    add(word)
+  local terms = {}
+  for _, item in ipairs(scored) do
+    table.insert(terms, item.term)
   end
-
   return terms
 end
 
@@ -526,36 +564,55 @@ function M.project_context(prompt, cb, root_override)
     return
   end
 
-  local term = terms[1]
-  system_text({
-    "rg",
-    "--line-number",
-    "--context",
-    "2",
-    "--smart-case",
-    "--max-count",
-    tostring(opts.max_rg_matches),
-    "--",
-    term,
-  }, { cwd = root }, function(err, matches)
-    local chunks = {
-      "# project root",
-      root,
-      "# search term",
-      term,
-    }
+  local selected = vim.list_slice(terms, 1, 3)
+  local per_term_budget = math.max(2000, math.floor(opts.max_context_chars / (#selected + 1)))
+  local chunks = {
+    "# project root",
+    root,
+    "# search terms",
+    table.concat(selected, ", "),
+  }
+  local matched = false
+  local index = 0
 
-    if err or matches == "" then
+  local function finish()
+    if not matched then
       table.insert(chunks, "# search results")
       table.insert(chunks, "No rg matches. Current buffer context is included instead.")
       table.insert(chunks, M.buffer_context(0, opts.max_context_chars).text)
-    else
-      table.insert(chunks, "# rg results")
-      table.insert(chunks, matches)
+    end
+    cb(nil, trim_context(table.concat(chunks, "\n"), opts.max_context_chars))
+  end
+
+  local function next_term()
+    index = index + 1
+    local term = selected[index]
+    if not term then
+      finish()
+      return
     end
 
-    cb(nil, trim_context(table.concat(chunks, "\n"), opts.max_context_chars))
-  end)
+    system_text({
+      "rg",
+      "--line-number",
+      "--context",
+      "2",
+      "--smart-case",
+      "--max-count",
+      tostring(opts.max_rg_matches),
+      "--",
+      term,
+    }, { cwd = root }, function(err, matches)
+      if not err and matches and matches ~= "" then
+        matched = true
+        table.insert(chunks, "# rg results: " .. term)
+        table.insert(chunks, trim_context(matches, per_term_budget))
+      end
+      next_term()
+    end)
+  end
+
+  next_term()
 end
 
 return M

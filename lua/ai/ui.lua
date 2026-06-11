@@ -94,9 +94,19 @@ local function focus_or_open_output()
     if valid_window(M.output_winid) then
       vim.api.nvim_set_current_win(M.output_winid)
     else
+      -- output_cmd creates a window holding a fresh unnamed buffer; delete
+      -- that placeholder after swapping in the reused output buffer, or it
+      -- accumulates as an orphaned [No Name] buffer.
       vim.cmd(opts.output_cmd)
       M.output_winid = vim.api.nvim_get_current_win()
+      local placeholder = vim.api.nvim_win_get_buf(M.output_winid)
       vim.api.nvim_win_set_buf(M.output_winid, M.output_bufnr)
+      if placeholder ~= M.output_bufnr
+        and vim.api.nvim_buf_is_valid(placeholder)
+        and vim.api.nvim_buf_get_name(placeholder) == ""
+        and not vim.bo[placeholder].modified then
+        pcall(vim.api.nvim_buf_delete, placeholder, { force = true })
+      end
     end
     return M.output_bufnr
   end
@@ -203,12 +213,72 @@ local function preview_instruction(review_text)
   return review_text
 end
 
-local function maybe_auto_apply_preview()
-  if M.auto_apply_edits_enabled() then
-    M.apply_pending()
-    return true
+local function auto_write_edits_enabled()
+  return config.get().safety and config.get().safety.auto_write_edits == true
+end
+
+local function write_applied_buffers(bufnrs)
+  if not auto_write_edits_enabled() then
+    return false, {}
   end
-  return false
+
+  local errors = {}
+  for _, bufnr in ipairs(bufnrs or {}) do
+    if vim.api.nvim_buf_is_valid(bufnr)
+      and vim.bo[bufnr].modified
+      and vim.bo[bufnr].buftype == ""
+      and vim.api.nvim_buf_get_name(bufnr) ~= "" then
+      local ok, err = pcall(vim.api.nvim_buf_call, bufnr, function()
+        vim.cmd("silent keepalt update")
+      end)
+      if not ok then
+        table.insert(errors, ("%s: %s"):format(vim.api.nvim_buf_get_name(bufnr), err))
+      end
+    end
+  end
+  return true, errors
+end
+
+local function disk_state_note(written, write_errors)
+  if not written then
+    return "Buffers are modified but not written to disk yet; the user must save them (or enable safety.auto_write_edits)."
+  end
+  if write_errors and #write_errors > 0 then
+    return "Some buffers could not be written to disk:\n" .. table.concat(write_errors, "\n")
+  end
+  return "Modified buffers were written to disk."
+end
+
+local function continue_chat(source, text)
+  if source ~= "chat" then
+    return
+  end
+  local ok, chat = pcall(require, "ai.chat")
+  if ok and type(chat.continue_with_apply_result) == "function" then
+    chat.continue_with_apply_result(text)
+  end
+end
+
+local function note_chat_event(source, text)
+  if source ~= "chat" then
+    return
+  end
+  local ok, chat = pcall(require, "ai.chat")
+  if ok and type(chat.note_editor_event) == "function" then
+    chat.note_editor_event(text)
+  end
+end
+
+local function maybe_auto_apply_preview()
+  if not M.auto_apply_edits_enabled() then
+    return nil
+  end
+
+  local captured
+  M.apply_pending(function(err, info)
+    captured = { err = err, info = info }
+  end)
+  return captured or { err = "Auto apply did not complete." }
 end
 
 local function strip_code_fence(text)
@@ -245,6 +315,7 @@ function M.preview_edit(opts)
     line2 = opts.line2,
     original_lines = opts.original_lines,
     replacement_lines = replacement_lines,
+    source = opts.source,
   }
 
   local original = join_lines(opts.original_lines)
@@ -288,7 +359,7 @@ function M.preview_edit(opts)
   else
     M.open_output("edit-preview", text, "markdown")
   end
-  maybe_auto_apply_preview()
+  return maybe_auto_apply_preview()
 end
 
 function M.preview_patch(opts)
@@ -315,6 +386,7 @@ function M.preview_patch(opts)
     patch = patch_text,
     title = opts.title or "patch",
     cwd = opts.cwd or context.root(0),
+    source = opts.source,
   }
 
   local text = table.concat({
@@ -338,7 +410,7 @@ function M.preview_patch(opts)
   else
     M.open_output(opts.title or "patch-preview", text, "markdown")
   end
-  maybe_auto_apply_preview()
+  return maybe_auto_apply_preview()
 end
 
 function M.preview_command(opts)
@@ -378,17 +450,44 @@ function M.preview_command(opts)
   end
 end
 
-function M.apply_pending()
+--- Apply the pending edit or patch.
+--- cb(err, info) is optional; info = { kind, message, written, write_errors, path }.
+--- Without cb (user-initiated :AIApply), the outcome is also fed back to AIChat
+--- when the preview was created from a chat tool call.
+function M.apply_pending(cb)
+  if type(cb) ~= "function" then
+    cb = nil
+  end
+
   if M.pending_patch then
     local pending = M.pending_patch
     M.notify("Applying AI patch...")
-    patch.apply(pending.patch, function(err, message)
+    patch.apply(pending.patch, function(err, message, bufnrs)
       if err then
         M.notify(err, vim.log.levels.ERROR)
+        if cb then
+          cb(err)
+        else
+          continue_chat(pending.source, "Applying the patch preview failed:\n" .. err)
+        end
         return
       end
+
       M.pending_patch = nil
-      M.notify(message or "AI patch applied.")
+      local written, write_errors = write_applied_buffers(bufnrs)
+      local full_message = (message or "AI patch applied.") .. " " .. disk_state_note(written, write_errors)
+      M.notify(full_message)
+      local info = {
+        kind = "patch",
+        message = full_message,
+        written = written and #write_errors == 0,
+        write_errors = write_errors,
+      }
+      if cb then
+        cb(nil, info)
+      else
+        continue_chat(pending.source, "The user applied the patch preview. " .. full_message)
+      end
     end, { cwd = pending.cwd })
     return
   end
@@ -396,23 +495,55 @@ function M.apply_pending()
   local edit = M.pending_edit
   if not edit then
     M.notify("No pending AI edit.", vim.log.levels.WARN)
+    if cb then
+      cb("No pending AI edit.")
+    end
     return
   end
+
+  local function fail(err)
+    M.notify(err, vim.log.levels.ERROR)
+    if cb then
+      cb(err)
+    else
+      continue_chat(edit.source, "Applying the edit preview failed: " .. err)
+    end
+  end
+
   if not vim.api.nvim_buf_is_valid(edit.bufnr) then
     M.pending_edit = nil
-    M.notify("Target buffer no longer exists.", vim.log.levels.ERROR)
+    fail("Target buffer no longer exists.")
     return
   end
 
   local current = vim.api.nvim_buf_get_lines(edit.bufnr, edit.line1 - 1, edit.line2, false)
   if not same_lines(current, edit.original_lines) then
-    M.notify("Target text changed after preview; refusing to apply stale edit.", vim.log.levels.ERROR)
+    fail("Target text changed after preview; refusing to apply stale edit.")
     return
   end
 
   vim.api.nvim_buf_set_lines(edit.bufnr, edit.line1 - 1, edit.line2, false, edit.replacement_lines)
   M.pending_edit = nil
-  M.notify("AI edit applied.")
+  local written, write_errors = write_applied_buffers({ edit.bufnr })
+  local full_message = ("AI edit applied to %s:%d-%d. %s"):format(
+    edit.path ~= "" and edit.path or "[No Name]",
+    edit.line1,
+    edit.line2,
+    disk_state_note(written, write_errors)
+  )
+  M.notify(full_message)
+  local info = {
+    kind = "edit",
+    path = edit.path,
+    message = full_message,
+    written = written and #write_errors == 0,
+    write_errors = write_errors,
+  }
+  if cb then
+    cb(nil, info)
+  else
+    continue_chat(edit.source, "The user applied the edit preview. " .. full_message)
+  end
 end
 
 function M.run_pending_command()
@@ -434,10 +565,17 @@ function M.run_pending_command()
 end
 
 function M.reject_pending()
+  local action = M.pending_action()
+  local source = (M.pending_edit and M.pending_edit.source)
+    or (M.pending_patch and M.pending_patch.source)
+    or (runner.pending and runner.pending.source)
   M.pending_edit = nil
   M.pending_patch = nil
   runner.clear()
   M.notify("AI pending action cleared.")
+  if action then
+    note_chat_event(source, ("The user rejected the pending %s preview without applying it."):format(action.kind))
+  end
 end
 
 return M

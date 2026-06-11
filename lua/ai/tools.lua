@@ -55,15 +55,12 @@ local function join_lines(lines)
   return table.concat(lines, "\n")
 end
 
-local function line_items(lines, start_line)
-  local items = {}
+local function numbered_lines(lines, start_line)
+  local out = {}
   for index, line in ipairs(lines or {}) do
-    table.insert(items, {
-      lnum = start_line + index - 1,
-      text = line,
-    })
+    table.insert(out, ("%d\t%s"):format(start_line + index - 1, line))
   end
-  return items
+  return out
 end
 
 local function split_lines(text)
@@ -670,7 +667,15 @@ local function code_action_item(action, index)
   }
 end
 
-local function preview_buffer_replace(args)
+local function replaced_pending_note(replaced)
+  if not replaced then
+    return ""
+  end
+  return (" Note: this discarded a previous pending %s preview that was never applied."):format(replaced)
+end
+
+local function preview_buffer_replace(args, opts)
+  opts = opts or {}
   if type(args.replacement) ~= "string" then
     return nil, "replacement is required"
   end
@@ -693,7 +698,10 @@ local function preview_buffer_replace(args)
   local original_lines = vim.api.nvim_buf_get_lines(bufnr, start_line - 1, end_line, false)
   local path = vim.api.nvim_buf_get_name(bufnr)
 
-  ui.preview_edit({
+  local replaced_action = ui.pending_action()
+  local replaced = replaced_action and replaced_action.kind or nil
+
+  local auto = ui.preview_edit({
     bufnr = bufnr,
     path = path,
     line1 = start_line,
@@ -701,25 +709,43 @@ local function preview_buffer_replace(args)
     original_lines = original_lines,
     replacement = args.replacement,
     title = string_arg(args, "title", "tool-preview-edit"),
+    source = opts.source,
   })
 
-  local auto_applied = ui.auto_apply_edits_enabled()
-  if not ui.pending_edit and not auto_applied then
-    return nil, "Edit preview did not create a pending edit."
-  end
-
-  return {
-    status = auto_applied and "applied" or "previewed",
+  local result = {
     action = "buffer_replace",
-    auto_applied = auto_applied,
     bufnr = bufnr,
     path = path,
     start_line = start_line,
     end_line = end_line,
     original_line_count = #original_lines,
     replacement_line_count = #split_lines(args.replacement),
-    message = auto_applied and "safety.auto_apply_edits is enabled; the edit was applied." or "Inspect the preview and run :AIApply to apply or :AIReject to discard.",
+    replaced_pending = replaced,
   }
+
+  if auto then
+    if auto.err then
+      result.status = "apply_failed"
+      result.auto_applied = false
+      result.error = auto.err
+      result.message = "safety.auto_apply_edits is enabled but applying failed: " .. auto.err
+      return result
+    end
+    result.status = "applied"
+    result.auto_applied = true
+    result.written = auto.info and auto.info.written or false
+    result.message = (auto.info and auto.info.message or "The edit was applied.") .. replaced_pending_note(replaced)
+    return result
+  end
+
+  if not ui.pending_edit then
+    return nil, "Edit preview did not create a pending edit."
+  end
+
+  result.status = "previewed"
+  result.auto_applied = false
+  result.message = "Inspect the preview and run :AIApply to apply or :AIReject to discard." .. replaced_pending_note(replaced)
+  return result
 end
 
 local function complete_sync(fn)
@@ -840,7 +866,7 @@ register({
 register({
   name = "nvim_read_buffer",
   mode = "read",
-  description = "Read text from a loaded buffer by 1-based line range.",
+  description = "Read text from a loaded buffer by 1-based line range. Each output line is prefixed with its line number and a tab.",
   input_schema = {
     type = "object",
     properties = {
@@ -861,8 +887,7 @@ register({
     local start_line = number_arg(args, "start_line", 1, 1, line_count)
     local end_line = number_arg(args, "end_line", line_count, start_line, line_count)
     local lines = vim.api.nvim_buf_get_lines(bufnr, start_line - 1, end_line, false)
-    local text, truncated = limit_text(join_lines(lines), args.max_chars)
-    local displayed_lines = split_lines(text)
+    local text, truncated = limit_text(join_lines(numbered_lines(lines, start_line)), args.max_chars)
 
     return {
       bufnr = bufnr,
@@ -872,7 +897,6 @@ register({
       end_line = end_line,
       line_count = line_count,
       text = text,
-      lines = line_items(displayed_lines, start_line),
       truncated = truncated,
     }
   end),
@@ -924,7 +948,7 @@ register({
 register({
   name = "nvim_read_file",
   mode = "read",
-  description = "Read a file under the current project root. Relative paths are resolved from the root.",
+  description = "Read a file under the current project root. Relative paths are resolved from the root. Each output line is prefixed with its line number and a tab.",
   input_schema = {
     type = "object",
     required = { "path" },
@@ -948,10 +972,11 @@ register({
       return nil, "Failed to read file: " .. path
     end
 
-    local text, truncated = limit_text(join_lines(lines), args.max_chars)
+    local text, truncated = limit_text(join_lines(numbered_lines(lines, 1)), args.max_chars)
     return {
       root = root,
       path = path,
+      line_count = #lines,
       text = text,
       truncated = truncated,
     }
@@ -1516,30 +1541,54 @@ register({
     },
     additionalProperties = false,
   },
-  run = complete_sync(function(args)
+  run = complete_sync(function(args, opts)
+    opts = opts or {}
     local patch_text = string_arg(args, "patch", "")
     if patch_text == "" then
       return nil, "patch is required"
     end
 
-    ui.preview_patch({
+    local replaced_action = ui.pending_action()
+    local replaced = replaced_action and replaced_action.kind or nil
+    local previous_pending = ui.pending_patch
+    local cwd = target_root()
+
+    local auto = ui.preview_patch({
       title = string_arg(args, "title", "tool-preview-patch"),
       text = patch_text,
-      cwd = target_root(),
+      cwd = cwd,
+      source = opts.source,
     })
 
-    local auto_apply = ui.auto_apply_edits_enabled()
-    if not ui.pending_patch and not auto_apply then
-      return nil, "Patch preview did not create a pending patch."
+    local result = {
+      action = "patch",
+      cwd = ui.pending_patch and ui.pending_patch.cwd or cwd,
+      replaced_pending = replaced,
+    }
+
+    if auto then
+      if auto.err then
+        result.status = "apply_failed"
+        result.auto_applied = false
+        result.error = auto.err
+        result.message = "safety.auto_apply_edits is enabled but applying failed: " .. auto.err
+        return result
+      end
+      result.status = "applied"
+      result.auto_applied = true
+      result.written = auto.info and auto.info.written or false
+      result.message = (auto.info and auto.info.message or "The patch was applied.") .. replaced_pending_note(replaced)
+      return result
     end
 
-    return {
-      status = auto_apply and "applying" or "previewed",
-      action = "patch",
-      auto_apply = auto_apply,
-      cwd = ui.pending_patch and ui.pending_patch.cwd or target_root(),
-      message = auto_apply and "safety.auto_apply_edits is enabled; applying the patch." or "Inspect the preview and run :AIApply to apply or :AIReject to discard.",
-    }
+    if not ui.pending_patch or ui.pending_patch == previous_pending then
+      return nil, "Patch preview did not create a pending patch; the response may not contain a valid unified diff."
+    end
+
+    result.status = "previewed"
+    result.auto_applied = false
+    result.message = "Inspect the preview and run :AIApply to apply or :AIReject to discard." .. replaced_pending_note(replaced)
+    return result
   end),
 })
 
@@ -1559,9 +1608,7 @@ register({
     },
     additionalProperties = false,
   },
-  run = complete_sync(function(args)
-    return preview_buffer_replace(args)
-  end),
+  run = complete_sync(preview_buffer_replace),
 })
 
 register({
@@ -1580,7 +1627,7 @@ register({
     },
     additionalProperties = false,
   },
-  run = complete_sync(function(args)
+  run = complete_sync(function(args, opts)
     local path, root = project_path(args.path)
     if not path then
       return nil, root
@@ -1595,7 +1642,7 @@ register({
     end
     vim.fn.bufload(bufnr)
 
-    local result, err = preview_buffer_replace(vim.tbl_extend("force", args, { bufnr = bufnr }))
+    local result, err = preview_buffer_replace(vim.tbl_extend("force", args, { bufnr = bufnr }), opts)
     if err then
       return nil, err
     end

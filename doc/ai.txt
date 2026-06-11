@@ -102,7 +102,9 @@ Agent plan:
 Chat:
   :AIChat {message}         Open side chat; optional message sends immediately.
   :AIChatToggle             Open or hide side chat.
-  :AIChatReset              Clear chat history.
+  :AIChatReset              Clear chat history (the saved session is kept).
+  :AIChatResume             Restore the most recent saved session.
+  :AIChatSessions           Pick a saved session to restore.
 
 The chat panel opens on the right. The top pane shows messages and the bottom
 pane is the input area. In the input pane:
@@ -112,6 +114,10 @@ pane is the input area. In the input pane:
   <C-q>                     Close both chat panes.
   q                         Close both chat panes.
 The empty input pane shows configurable ghost text from chat.placeholder.
+Chat history is persisted per project as JSONL files under
+stdpath("state")/ai.nvim/sessions; disable with chat.sessions.enabled = false.
+Only the most recent chat.max_full_tool_results tool results are sent to the
+model in full; older ones are compressed to a one-line summary.
 AIChat can call harness tools by default. Tool calls and tool results are shown
 as Markdown callouts in the conversation. Patch and command tools only create
 previews; use :AIApply or :AIRun after inspection. Tool result details are
@@ -153,7 +159,11 @@ diagnostics, quickfix and location lists, git diff, project file listing,
 project search, patch preview, and command preview.
 
 Preview tools prepare a pending action only. Patch tools still require
-:AIApply, and command tools still require :AIRun.
+:AIApply, and command tools still require :AIRun. Applied edits modify
+buffers; set safety.auto_write_edits = true to also write the modified
+buffers to disk after a successful apply. When the preview was created by an
+AIChat tool call, the :AIApply result is fed back into the conversation and
+:AIReject is recorded as an editor event.
 
 AIChat uses this registry automatically when chat.tools_enabled is true:
 >
