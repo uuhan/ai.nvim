@@ -226,6 +226,20 @@ local function scroll_messages()
   pcall(vim.api.nvim_win_set_cursor, M.messages_winid, { line_count, 0 })
 end
 
+--- Follow output only while the cursor sits at the bottom of the messages
+--- pane; once the user scrolls up to read, stop yanking the view down.
+local function should_follow()
+  if not valid_window(M.messages_winid) or not valid_buffer(M.messages_bufnr) then
+    return true
+  end
+  local ok, cursor = pcall(vim.api.nvim_win_get_cursor, M.messages_winid)
+  if not ok then
+    return true
+  end
+  local line_count = vim.api.nvim_buf_line_count(M.messages_bufnr)
+  return cursor[1] >= line_count - 1
+end
+
 local function fold_tool_results(lines)
   if config.get().chat.fold_tool_results == false or not valid_window(M.messages_winid) then
     return
@@ -266,24 +280,51 @@ local function fold_tool_results(lines)
   end)
 end
 
-local function set_messages(text)
+local last_rendered_lines = nil
+
+local function set_messages(text, opts)
   if not valid_buffer(M.messages_bufnr) then
     return
   end
   local lines = split_lines(text)
+  local follow = should_follow()
+
+  -- During streaming only the tail changes; rewrite the differing suffix so
+  -- existing folds and the renderer stay untouched and long chats stay smooth.
+  local incremental = opts
+    and opts.incremental
+    and last_rendered_lines
+    and vim.api.nvim_buf_line_count(M.messages_bufnr) == #last_rendered_lines
+
   vim.bo[M.messages_bufnr].modifiable = true
-  vim.api.nvim_buf_set_lines(M.messages_bufnr, 0, -1, false, lines)
-  vim.bo[M.messages_bufnr].modifiable = false
-  enable_markdown_renderer()
-  fold_tool_results(lines)
-  scroll_messages()
+  if incremental then
+    local prefix = 0
+    local min_len = math.min(#last_rendered_lines, #lines)
+    while prefix < min_len and last_rendered_lines[prefix + 1] == lines[prefix + 1] do
+      prefix = prefix + 1
+    end
+    if prefix < #lines or #last_rendered_lines ~= #lines then
+      vim.api.nvim_buf_set_lines(M.messages_bufnr, prefix, -1, false, vim.list_slice(lines, prefix + 1, #lines))
+    end
+    vim.bo[M.messages_bufnr].modifiable = false
+  else
+    vim.api.nvim_buf_set_lines(M.messages_bufnr, 0, -1, false, lines)
+    vim.bo[M.messages_bufnr].modifiable = false
+    enable_markdown_renderer()
+    fold_tool_results(lines)
+  end
+
+  last_rendered_lines = lines
+  if follow then
+    scroll_messages()
+  end
 end
 
 local function set_status(status, detail, extra)
   M.status = status or "idle"
   M.status_detail = detail or ""
   if valid_buffer(M.messages_bufnr) then
-    set_messages(render_history(extra))
+    set_messages(render_history(extra), { incremental = status == "streaming" })
   end
 end
 
@@ -430,8 +471,10 @@ local function harness_prompt()
   end
 
   vim.list_extend(lines, {
-    "When the user asks you to change code, prefer nvim_preview_buffer_replace, nvim_preview_file_replace, or nvim_preview_patch instead of only describing the edit.",
-    "Only one preview (edit, patch, or command) can be pending at a time; creating a new preview discards an unapplied one.",
+    "When the user asks you to change code, edit instead of only describing the edit: prefer nvim_edit_file for targeted string edits, nvim_create_file for new files, nvim_preview_buffer_replace or nvim_preview_file_replace for line-range rewrites, and nvim_preview_patch for multi-file diffs.",
+    "Read tools prefix each line with its number and a tab; never include those prefixes in old_string, new_string, or replacement text.",
+    "Use nvim_grep and nvim_glob for structured project searches.",
+    "Only one preview (edit, patch, command, or file creation) can be pending at a time; creating a new preview discards an unapplied one.",
     "After creating a preview, finish your reply and wait; a follow-up message will report whether the user applied or rejected it.",
     "Do not claim that a preview tool ran a command unless its tool result says status=ran.",
   })
@@ -654,7 +697,14 @@ local function parse_tool_call(text)
     return call
   end
 
-  for _, object in ipairs(json_objects(body)) do
+  -- Mask fenced code blocks (same length, so indices stay valid) before
+  -- scanning for embedded tool-call JSON: a fenced example like
+  -- ```json {"tool":...} ``` quoted in prose must not be executed.
+  local masked = body:gsub("```.-```", function(block)
+    return string.rep(" ", #block)
+  end)
+
+  for _, object in ipairs(json_objects(masked)) do
     call = normalize(json_decode(object.text))
     if call then
       local preface = (body:sub(1, object.start_index - 1) .. body:sub(object.end_index + 1)):gsub("^%s+", ""):gsub("%s+$", "")
@@ -1107,11 +1157,11 @@ function M.send(text, send_opts)
 
     local request_next
 
-    local function handle_response(tool_rounds, response, message)
-      local calls = parse_native_tool_calls(message)
+    local function handle_response(tool_rounds, response, message, no_tools)
+      local calls = no_tools and {} or parse_native_tool_calls(message)
       if #calls > 0 then
         append_assistant_text(response)
-      else
+      elseif not no_tools then
         local text_call = parse_tool_call(response)
         if text_call then
           append_assistant_text(text_call.preface)
@@ -1126,7 +1176,14 @@ function M.send(text, send_opts)
       end
 
       if tool_rounds + #calls > max_rounds then
-        finish("error", "tool round limit reached", "## Error\n\nAIChat stopped after reaching the tool round limit.")
+        -- Don't throw away the whole conversation: tell the model the limit
+        -- is reached and request one final tool-free answer.
+        push_history({
+          role = "user",
+          kind = "event",
+          content = ("The tool round limit (%d) was reached. Answer the user's request now using the information already gathered; do not call any more tools."):format(max_rounds),
+        })
+        request_next(tool_rounds, true)
         return
       end
 
@@ -1135,13 +1192,13 @@ function M.send(text, send_opts)
       end)
     end
 
-    request_next = function(tool_rounds)
+    request_next = function(tool_rounds, no_tools)
       if stale() then
         return
       end
 
       local opts = {}
-      if config.get().chat.native_tools ~= false then
+      if not no_tools and config.get().chat.native_tools ~= false then
         opts.tools = tools.openai_tools()
         opts.tool_choice = "auto"
       end
@@ -1176,7 +1233,7 @@ function M.send(text, send_opts)
             assistant = text
             clear_renderer()
             M.active_request = nil
-            handle_response(tool_rounds, assistant, stream_tool_call_message(stream_calls, reasoning_content ~= "" and reasoning_content or nil))
+            handle_response(tool_rounds, assistant, stream_tool_call_message(stream_calls, reasoning_content ~= "" and reasoning_content or nil), no_tools)
           end,
         })
         M.active_stream = renderer
@@ -1236,7 +1293,7 @@ function M.send(text, send_opts)
           return
         end
 
-        handle_response(tool_rounds, response, message)
+        handle_response(tool_rounds, response, message, no_tools)
       end)
     end
 
@@ -1349,6 +1406,9 @@ local function map_input_keys()
     vim.cmd.stopinsert()
     M.send()
   end, vim.tbl_extend("force", opts, { desc = "AI chat send" }))
+  -- <CR> sends, so provide explicit ways to insert a line break
+  vim.keymap.set("i", "<S-CR>", "<CR>", vim.tbl_extend("force", opts, { desc = "AI chat newline" }))
+  vim.keymap.set("i", "<C-j>", "<CR>", vim.tbl_extend("force", opts, { desc = "AI chat newline" }))
   vim.keymap.set("n", "<C-l>", M.clear, vim.tbl_extend("force", opts, { desc = "AI chat clear" }))
   vim.keymap.set({ "n", "i" }, "<C-c>", stop, vim.tbl_extend("force", opts, { desc = "AI chat stop" }))
   vim.keymap.set("n", "q", M.close, vim.tbl_extend("force", opts, { desc = "AI chat close" }))

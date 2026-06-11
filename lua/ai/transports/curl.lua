@@ -1,6 +1,31 @@
 local M = {}
 
-local function build_args(req, stream)
+--- Headers (including Authorization) are passed through a curl config file
+--- instead of argv so the API key never shows up in the process list.
+--- vim.fn.tempname() lives in Neovim's private 0700 temp directory.
+local function write_header_config(headers)
+  local lines = {}
+  for name, value in pairs(headers or {}) do
+    table.insert(lines, ("header = %q"):format(name .. ": " .. value))
+  end
+  if vim.tbl_isempty(lines) then
+    return nil
+  end
+
+  local path = vim.fn.tempname()
+  if vim.fn.writefile(lines, path) ~= 0 then
+    return nil, "Failed to write curl header config."
+  end
+  return path
+end
+
+local function cleanup(path)
+  if path then
+    pcall(vim.fn.delete, path)
+  end
+end
+
+local function build_args(req, stream, header_config)
   local args = {
     req.curl or "curl",
     "-sS",
@@ -18,9 +43,9 @@ local function build_args(req, stream)
     table.insert(args, 2, "-N")
   end
 
-  for name, value in pairs(req.headers or {}) do
-    table.insert(args, "-H")
-    table.insert(args, name .. ": " .. value)
+  if header_config then
+    table.insert(args, "-K")
+    table.insert(args, header_config)
   end
 
   return args
@@ -34,8 +59,17 @@ function M.request(req, cb)
     return
   end
 
-  local job = vim.system(build_args(req, false), { text = true, stdin = req.body_json }, function(obj)
+  local header_config, header_err = write_header_config(req.headers)
+  if header_err then
     vim.schedule(function()
+      cb(header_err)
+    end)
+    return
+  end
+
+  local ok, job = pcall(vim.system, build_args(req, false, header_config), { text = true, stdin = req.body_json }, function(obj)
+    vim.schedule(function()
+      cleanup(header_config)
       if obj.code ~= 0 then
         cb(("Provider request failed (%s):\n%s%s"):format(obj.code, obj.stderr or "", obj.stdout or ""))
         return
@@ -43,13 +77,32 @@ function M.request(req, cb)
       cb(nil, obj.stdout or "")
     end)
   end)
+
+  if not ok then
+    cleanup(header_config)
+    vim.schedule(function()
+      cb("Failed to start curl: " .. tostring(job))
+    end)
+    return
+  end
   return job
 end
 
 function M.stream(req, callbacks)
   callbacks = callbacks or {}
+
+  local header_config, header_err = write_header_config(req.headers)
+  if header_err then
+    vim.schedule(function()
+      if callbacks.on_error then
+        callbacks.on_error(header_err)
+      end
+    end)
+    return
+  end
+
   local stderr = {}
-  local job = vim.fn.jobstart(build_args(req, true), {
+  local job = vim.fn.jobstart(build_args(req, true, header_config), {
     stdout_buffered = false,
     stderr_buffered = false,
     on_stdout = function(_, data)
@@ -68,6 +121,7 @@ function M.stream(req, callbacks)
     end,
     on_exit = function(_, code)
       vim.schedule(function()
+        cleanup(header_config)
         if code ~= 0 then
           if callbacks.on_error then
             callbacks.on_error(("Provider stream failed (%s):\n%s"):format(code, table.concat(stderr, "\n")))
@@ -82,6 +136,7 @@ function M.stream(req, callbacks)
   })
 
   if job <= 0 then
+    cleanup(header_config)
     vim.schedule(function()
       if callbacks.on_error then
         callbacks.on_error("Failed to start curl stream.")

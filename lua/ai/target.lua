@@ -22,7 +22,25 @@ local function editor_buffer(bufnr)
   return valid_buffer(bufnr) and vim.bo[bufnr].buftype == "" and not M.is_ai_buffer(bufnr)
 end
 
+M.suspended = false
+
+--- Run fn with target capture suspended. Used while plugin windows are being
+--- created, so transient placeholder buffers never steal the target.
+function M.with_suspended(fn)
+  local previous = M.suspended
+  M.suspended = true
+  local ok, err = pcall(fn)
+  M.suspended = previous
+  if not ok then
+    error(err)
+  end
+end
+
 function M.capture(winid)
+  if M.suspended then
+    return M.target_bufnr, M.last_editor_winid
+  end
+
   winid = winid or vim.api.nvim_get_current_win()
   if not valid_window(winid) then
     return M.target_bufnr, M.last_editor_winid
@@ -73,13 +91,27 @@ function M.resolve_buffer(bufnr)
     return explicit
   end
 
+  local current_winid = vim.api.nvim_get_current_win()
+  if valid_window(current_winid) and editor_buffer(vim.api.nvim_win_get_buf(current_winid)) then
+    M.capture(current_winid)
+    return vim.api.nvim_win_get_buf(current_winid)
+  end
+
+  if valid_window(M.last_editor_winid) and editor_buffer(vim.api.nvim_win_get_buf(M.last_editor_winid)) then
+    M.capture(M.last_editor_winid)
+    return vim.api.nvim_win_get_buf(M.last_editor_winid)
+  end
+
+  -- The remembered target buffer wins over scanning arbitrary windows: with
+  -- multiple editor windows open, "first window in layout order" is not a
+  -- meaningful choice and makes the target drift.
+  if editor_buffer(M.target_bufnr) then
+    return M.target_bufnr
+  end
+
   local winid = M.resolve_window()
   if winid then
     return vim.api.nvim_win_get_buf(winid)
-  end
-
-  if editor_buffer(M.target_bufnr) then
-    return M.target_bufnr
   end
 
   local current = vim.api.nvim_get_current_buf()

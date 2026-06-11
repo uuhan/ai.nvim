@@ -1066,20 +1066,41 @@ function M.plan(cmd)
   fn()
 end
 
-function M.chat(cmd)
+local function chat_selection_block(cmd)
+  if not cmd.range or cmd.range == 0 then
+    return nil
+  end
+
+  local sel = context.selection_context(cmd)
+  return table.concat({
+    ("File: %s (lines %d-%d)"):format(sel.path ~= "" and rel_path(sel.path, sel.root) or "[No Name]", sel.line1, sel.line2),
+    "",
+    "```" .. (sel.filetype ~= "" and sel.filetype or "text"),
+    sel.text,
+    "```",
+  }, "\n")
+end
+
+local function open_chat(cmd, layout)
   local prompt = cmd.args or ""
-  chat_panel.open({ system_prompt = system_prompt })
-  if prompt ~= "" then
+  -- capture the selection before the chat window steals focus
+  local block = chat_selection_block(cmd)
+  chat_panel.open({ system_prompt = system_prompt, layout = layout })
+  if block and prompt ~= "" then
+    chat_panel.send(prompt .. "\n\n" .. block)
+  elseif block then
+    chat_panel.note_editor_event("The user shared this selection as context:\n\n" .. block)
+  elseif prompt ~= "" then
     chat_panel.send(prompt)
   end
 end
 
+function M.chat(cmd)
+  open_chat(cmd, nil)
+end
+
 function M.pop_chat(cmd)
-  local prompt = cmd.args or ""
-  chat_panel.open({ system_prompt = system_prompt, layout = "float" })
-  if prompt ~= "" then
-    chat_panel.send(prompt)
-  end
+  open_chat(cmd, "float")
 end
 
 function M.chat_toggle()
@@ -1304,8 +1325,8 @@ function M.setup()
   create_command("AIGit", M.git_cmd, { range = false })
   create_command("AIAgent", M.agent, { range = false })
   create_command("AIPlan", M.plan, { nargs = "?", range = false, complete = complete_plan_actions })
-  create_command("AIChat", M.chat, { range = false })
-  create_command("AIPopChat", M.pop_chat, { range = false })
+  create_command("AIChat", M.chat)
+  create_command("AIPopChat", M.pop_chat)
   create_command("AIChatToggle", M.chat_toggle, { nargs = 0, range = false })
   create_command("AIPopChatToggle", M.pop_chat_toggle, { nargs = 0, range = false })
   create_command("AIChatStop", M.chat_stop, { nargs = 0, range = false })

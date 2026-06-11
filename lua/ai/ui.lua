@@ -3,10 +3,12 @@ local context = require("ai.context")
 local patch = require("ai.patch")
 local popup = require("ai.popup")
 local runner = require("ai.runner")
+local target = require("ai.target")
 
 local M = {
   pending_edit = nil,
   pending_patch = nil,
+  pending_create = nil,
   output_bufnr = nil,
   output_winid = nil,
 }
@@ -94,27 +96,32 @@ local function focus_or_open_output()
     if valid_window(M.output_winid) then
       vim.api.nvim_set_current_win(M.output_winid)
     else
-      -- output_cmd creates a window holding a fresh unnamed buffer; delete
-      -- that placeholder after swapping in the reused output buffer, or it
-      -- accumulates as an orphaned [No Name] buffer.
-      vim.cmd(opts.output_cmd)
-      M.output_winid = vim.api.nvim_get_current_win()
-      local placeholder = vim.api.nvim_win_get_buf(M.output_winid)
-      vim.api.nvim_win_set_buf(M.output_winid, M.output_bufnr)
-      if placeholder ~= M.output_bufnr
-        and vim.api.nvim_buf_is_valid(placeholder)
-        and vim.api.nvim_buf_get_name(placeholder) == ""
-        and not vim.bo[placeholder].modified then
-        pcall(vim.api.nvim_buf_delete, placeholder, { force = true })
-      end
+      -- output_cmd creates a window holding a fresh unnamed buffer; suspend
+      -- target capture so the placeholder cannot steal the target, and delete
+      -- it after swapping in the reused output buffer.
+      target.with_suspended(function()
+        vim.cmd(opts.output_cmd)
+        M.output_winid = vim.api.nvim_get_current_win()
+        local placeholder = vim.api.nvim_win_get_buf(M.output_winid)
+        vim.api.nvim_win_set_buf(M.output_winid, M.output_bufnr)
+        if placeholder ~= M.output_bufnr
+          and vim.api.nvim_buf_is_valid(placeholder)
+          and vim.api.nvim_buf_get_name(placeholder) == ""
+          and not vim.bo[placeholder].modified then
+          pcall(vim.api.nvim_buf_delete, placeholder, { force = true })
+        end
+      end)
     end
     return M.output_bufnr
   end
 
-  vim.cmd(opts.output_cmd)
-  local bufnr = vim.api.nvim_get_current_buf()
-  M.output_bufnr = bufnr
-  M.output_winid = vim.api.nvim_get_current_win()
+  local bufnr
+  target.with_suspended(function()
+    vim.cmd(opts.output_cmd)
+    bufnr = vim.api.nvim_get_current_buf()
+    M.output_bufnr = bufnr
+    M.output_winid = vim.api.nvim_get_current_win()
+  end)
   return bufnr
 end
 
@@ -177,6 +184,16 @@ function M.pending_action()
       apply = ":AIApply",
       reject = ":AIReject",
       message = "Run `:AIApply` to apply this patch or `:AIReject` to discard it.",
+    }
+  end
+
+  if M.pending_create then
+    return {
+      kind = "create",
+      title = "Pending AI file creation preview",
+      apply = ":AIApply",
+      reject = ":AIReject",
+      message = "Run `:AIApply` to create this file or `:AIReject` to discard it.",
     }
   end
 
@@ -307,6 +324,7 @@ function M.preview_edit(opts)
   local replacement_lines = split_lines(replacement)
 
   M.pending_patch = nil
+  M.pending_create = nil
   runner.clear()
   M.pending_edit = {
     bufnr = opts.bufnr,
@@ -381,6 +399,7 @@ function M.preview_patch(opts)
   end
 
   M.pending_edit = nil
+  M.pending_create = nil
   runner.clear()
   M.pending_patch = {
     patch = patch_text,
@@ -413,6 +432,39 @@ function M.preview_patch(opts)
   return maybe_auto_apply_preview()
 end
 
+--- Preview creating a new project file. Applying loads the content into a
+--- new buffer; safety.auto_write_edits controls whether it is written to disk.
+function M.preview_create(opts)
+  local content_lines = split_lines(opts.content or "")
+
+  M.pending_edit = nil
+  M.pending_patch = nil
+  runner.clear()
+  M.pending_create = {
+    path = opts.path,
+    lines = content_lines,
+    source = opts.source,
+  }
+
+  local filetype = vim.filetype.match({ filename = opts.path }) or "text"
+  local text = table.concat({
+    "# AI file creation preview: " .. opts.path,
+    "",
+    preview_instruction("Inspect the new file content, then run :AIApply or :AIReject."),
+    "",
+    "```" .. filetype,
+    table.concat(content_lines, "\n"),
+    "```",
+  }, "\n")
+
+  if opts.output_bufnr then
+    M.set_output(opts.output_bufnr, "create-preview", text, "markdown")
+  else
+    M.open_output("create-preview", text, "markdown")
+  end
+  return maybe_auto_apply_preview()
+end
+
 function M.preview_command(opts)
   local pending, err = runner.preview(opts.command or "", {
     title = opts.title,
@@ -430,6 +482,7 @@ function M.preview_command(opts)
 
   M.pending_edit = nil
   M.pending_patch = nil
+  M.pending_create = nil
 
   local text = table.concat({
     "# AI command preview",
@@ -489,6 +542,62 @@ function M.apply_pending(cb)
         continue_chat(pending.source, "The user applied the patch preview. " .. full_message)
       end
     end, { cwd = pending.cwd })
+    return
+  end
+
+  if M.pending_create then
+    local pending = M.pending_create
+
+    local function create_fail(err)
+      M.notify(err, vim.log.levels.ERROR)
+      if cb then
+        cb(err)
+      else
+        continue_chat(pending.source, "Creating the file failed: " .. err)
+      end
+    end
+
+    if vim.fn.filereadable(pending.path) == 1 then
+      M.pending_create = nil
+      create_fail("File already exists: " .. pending.path)
+      return
+    end
+
+    local parent = vim.fs.dirname(pending.path)
+    if parent and parent ~= "" and vim.fn.isdirectory(parent) == 0 then
+      local ok = pcall(vim.fn.mkdir, parent, "p")
+      if not ok then
+        create_fail("Could not create directory: " .. parent)
+        return
+      end
+    end
+
+    local bufnr = vim.fn.bufadd(pending.path)
+    vim.fn.bufload(bufnr)
+    vim.bo[bufnr].buflisted = true
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, pending.lines)
+    M.pending_create = nil
+
+    local written, write_errors = write_applied_buffers({ bufnr })
+    local full_message = ("AI file created: %s (%d lines). %s"):format(
+      pending.path,
+      #pending.lines,
+      disk_state_note(written, write_errors)
+    )
+    M.notify(full_message)
+    local info = {
+      kind = "create",
+      path = pending.path,
+      bufnr = bufnr,
+      message = full_message,
+      written = written and #write_errors == 0,
+      write_errors = write_errors,
+    }
+    if cb then
+      cb(nil, info)
+    else
+      continue_chat(pending.source, "The user applied the file creation preview. " .. full_message)
+    end
     return
   end
 
@@ -568,9 +677,11 @@ function M.reject_pending()
   local action = M.pending_action()
   local source = (M.pending_edit and M.pending_edit.source)
     or (M.pending_patch and M.pending_patch.source)
+    or (M.pending_create and M.pending_create.source)
     or (runner.pending and runner.pending.source)
   M.pending_edit = nil
   M.pending_patch = nil
+  M.pending_create = nil
   runner.clear()
   M.notify("AI pending action cleared.")
   if action then

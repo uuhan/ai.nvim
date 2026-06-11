@@ -241,6 +241,28 @@ local function list_entry(item)
   }
 end
 
+local path_uv = vim.uv or vim.loop
+
+--- Resolve symlinks; for paths that do not exist yet (file creation), resolve
+--- the nearest existing ancestor so a symlinked directory cannot smuggle the
+--- target outside the project root.
+local function resolve_real(path)
+  local real = path_uv.fs_realpath(path)
+  if real then
+    return real
+  end
+
+  local parent = vim.fs.dirname(path)
+  if not parent or parent == path then
+    return nil
+  end
+  local real_parent = resolve_real(parent)
+  if not real_parent then
+    return nil
+  end
+  return real_parent .. "/" .. vim.fs.basename(path)
+end
+
 local function project_path(path)
   if type(path) ~= "string" or path == "" then
     return nil, "path is required"
@@ -248,18 +270,24 @@ local function project_path(path)
 
   local root = vim.fn.fnamemodify(target_root(), ":p"):gsub("/$", "")
   root = vim.fs.normalize(root)
-  local expanded = vim.fn.expand(path)
-  local resolved = expanded
+  local real_root = path_uv.fs_realpath(root) or root
+
+  local resolved = path
   if not resolved:match("^/") then
     resolved = root .. "/" .. resolved
   end
   resolved = vim.fs.normalize(vim.fn.fnamemodify(resolved, ":p"))
 
-  if resolved ~= root and resolved:sub(1, #root + 1) ~= root .. "/" then
-    return nil, "Refusing to read outside project root: " .. resolved
+  local real = resolve_real(resolved)
+  if not real then
+    return nil, "Could not resolve path: " .. resolved
   end
 
-  return resolved, root
+  if real ~= real_root and real:sub(1, #real_root + 1) ~= real_root .. "/" then
+    return nil, "Refusing to access a path outside the project root: " .. real
+  end
+
+  return real, root
 end
 
 local function json_encode(value)
@@ -672,6 +700,40 @@ local function replaced_pending_note(replaced)
     return ""
   end
   return (" Note: this discarded a previous pending %s preview that was never applied."):format(replaced)
+end
+
+local function load_project_buffer(path)
+  local bufnr = vim.fn.bufnr(path)
+  if bufnr == -1 then
+    bufnr = vim.fn.bufadd(path)
+  end
+  vim.fn.bufload(bufnr)
+  return bufnr
+end
+
+local function offset_to_position(text, offset)
+  local before = text:sub(1, offset - 1)
+  local _, newline_count = before:gsub("\n", "")
+  local last_newline = before:match(".*()\n")
+  return newline_count + 1, offset - (last_newline or 0)
+end
+
+local function find_occurrences(text, needle)
+  local occurrences = {}
+  local init = 1
+  while true do
+    local start_index, end_index = text:find(needle, init, true)
+    if not start_index then
+      break
+    end
+    table.insert(occurrences, { start_index = start_index, end_index = end_index })
+    init = start_index + 1
+  end
+  return occurrences
+end
+
+local function looks_line_numbered(text)
+  return text:match("^%d+\t") ~= nil or text:match("\n%d+\t") ~= nil
 end
 
 local function preview_buffer_replace(args, opts)
@@ -1529,6 +1591,132 @@ register({
 })
 
 register({
+  name = "nvim_grep",
+  mode = "read",
+  description = "Search file contents in the project with ripgrep and return structured matches (path, line, column, text).",
+  input_schema = {
+    type = "object",
+    required = { "pattern" },
+    properties = {
+      pattern = { type = "string", description = "Regular expression in ripgrep syntax." },
+      glob = { type = "string", description = "Optional glob to restrict files, e.g. \"*.lua\" or \"src/**\"." },
+      fixed = { type = "boolean", description = "Treat pattern as a literal string instead of a regex. Defaults to false." },
+      case = { type = "string", enum = { "smart", "sensitive", "insensitive" }, description = "Case sensitivity. Defaults to smart." },
+      max_items = { type = "integer", description = "Maximum matches to return. Defaults to 100." },
+    },
+    additionalProperties = false,
+  },
+  run = function(args, cb)
+    args = args or {}
+    local pattern = string_arg(args, "pattern", "")
+    if pattern == "" then
+      cb("pattern is required")
+      return
+    end
+
+    local root = target_root()
+    local max_items = number_arg(args, "max_items", 100, 1, 1000)
+    local case = string_arg(args, "case", "smart")
+    local case_flag = ({
+      smart = "--smart-case",
+      sensitive = "--case-sensitive",
+      insensitive = "--ignore-case",
+    })[case]
+    if not case_flag then
+      cb("case must be one of: smart, sensitive, insensitive")
+      return
+    end
+
+    local cmd = { "rg", "--vimgrep", "--no-heading", case_flag }
+    if bool_arg(args, "fixed", false) then
+      table.insert(cmd, "--fixed-strings")
+    end
+    local glob = string_arg(args, "glob", "")
+    if glob ~= "" then
+      table.insert(cmd, "--glob")
+      table.insert(cmd, glob)
+    end
+    table.insert(cmd, "--")
+    table.insert(cmd, pattern)
+
+    context.system_text(cmd, { cwd = root }, function(err, output)
+      -- rg exits 1 with empty output when nothing matches
+      if err and err ~= "" then
+        cb("rg failed: " .. err)
+        return
+      end
+
+      local items = {}
+      local total = 0
+      for line in (output or ""):gmatch("[^\n]+") do
+        local path, lnum, col, text = line:match("^(.-):(%d+):(%d+):(.*)$")
+        if path then
+          total = total + 1
+          if #items < max_items then
+            table.insert(items, {
+              path = path,
+              lnum = tonumber(lnum),
+              col = tonumber(col),
+              text = text,
+            })
+          end
+        end
+      end
+
+      cb(nil, {
+        root = root,
+        pattern = pattern,
+        glob = glob ~= "" and glob or nil,
+        items = items,
+        total = total,
+        truncated = total > #items,
+      })
+    end)
+  end,
+})
+
+register({
+  name = "nvim_glob",
+  mode = "read",
+  description = "Find project files matching a glob pattern using ripgrep's file walker (respects .gitignore).",
+  input_schema = {
+    type = "object",
+    required = { "pattern" },
+    properties = {
+      pattern = { type = "string", description = "Glob pattern matched against project-relative paths, e.g. \"**/*.lua\" or \"lua/ai/*.lua\"." },
+      max_items = { type = "integer", description = "Maximum files to return. Defaults to 200." },
+    },
+    additionalProperties = false,
+  },
+  run = function(args, cb)
+    args = args or {}
+    local pattern = string_arg(args, "pattern", "")
+    if pattern == "" then
+      cb("pattern is required")
+      return
+    end
+
+    local root = target_root()
+    local max_items = number_arg(args, "max_items", 200, 1, 2000)
+    context.system_text({ "rg", "--files", "--glob", pattern }, { cwd = root }, function(err, output)
+      if err and err ~= "" then
+        cb("rg failed: " .. err)
+        return
+      end
+
+      local all = vim.split(output or "", "\n", { plain = true, trimempty = true })
+      cb(nil, {
+        root = root,
+        pattern = pattern,
+        files = vim.list_slice(all, 1, max_items),
+        total = #all,
+        truncated = #all > max_items,
+      })
+    end)
+  end,
+})
+
+register({
   name = "nvim_preview_patch",
   mode = "preview",
   description = "Preview a unified diff in ai.nvim. It does not apply the patch; the user must run :AIApply.",
@@ -1649,6 +1837,158 @@ register({
     result.action = "file_replace"
     result.root = root
     result.path = path
+    return result
+  end),
+})
+
+register({
+  name = "nvim_edit_file",
+  mode = "preview",
+  description = "Replace exactly one occurrence of old_string with new_string in a project file and preview the edit. old_string must match the file text exactly and be unique in the file; never include the line-number prefixes that read tools add. The user must run :AIApply.",
+  input_schema = {
+    type = "object",
+    required = { "path", "old_string", "new_string" },
+    properties = {
+      path = { type = "string", description = "Project-relative path, or an absolute path inside the project root." },
+      old_string = { type = "string", description = "Exact text to replace. Include enough surrounding lines to make it unique in the file." },
+      new_string = { type = "string", description = "Replacement text. May be empty to delete old_string." },
+      title = { type = "string", description = "Optional preview title." },
+    },
+    additionalProperties = false,
+  },
+  run = complete_sync(function(args, opts)
+    local old_string = args.old_string
+    local new_string = args.new_string
+    if type(old_string) ~= "string" or old_string == "" then
+      return nil, "old_string is required"
+    end
+    if type(new_string) ~= "string" then
+      return nil, "new_string is required (may be an empty string)"
+    end
+    if old_string == new_string then
+      return nil, "old_string and new_string are identical"
+    end
+
+    local path, root = project_path(args.path)
+    if not path then
+      return nil, root
+    end
+    if vim.fn.filereadable(path) ~= 1 then
+      return nil, "File is not readable: " .. path
+    end
+
+    local bufnr = load_project_buffer(path)
+    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+    local text = join_lines(lines)
+
+    local occurrences = find_occurrences(text, old_string)
+    if #occurrences == 0 then
+      local hint = "old_string was not found in " .. path .. ". Read the file and copy the exact text."
+      if looks_line_numbered(old_string) then
+        hint = hint .. " It looks like old_string contains line-number prefixes from a read tool; remove them."
+      end
+      return nil, hint
+    end
+    if #occurrences > 1 then
+      return nil, ("old_string matches %d locations in %s; include more surrounding context to make it unique."):format(#occurrences, path)
+    end
+
+    local match = occurrences[1]
+    local start_line, start_col = offset_to_position(text, match.start_index)
+    local end_line, end_col = offset_to_position(text, match.end_index)
+    local prefix = (lines[start_line] or ""):sub(1, start_col - 1)
+    local suffix = (lines[end_line] or ""):sub(end_col + 1)
+
+    local result, err = preview_buffer_replace({
+      bufnr = bufnr,
+      start_line = start_line,
+      end_line = end_line,
+      replacement = prefix .. new_string .. suffix,
+      title = string_arg(args, "title", "tool-edit-file"),
+    }, opts)
+    if err then
+      return nil, err
+    end
+    result.action = "edit_file"
+    result.root = root
+    result.path = path
+    return result
+  end),
+})
+
+register({
+  name = "nvim_create_file",
+  mode = "preview",
+  description = "Preview creating a new file under the project root with the given content. The file must not exist yet. The user must run :AIApply.",
+  input_schema = {
+    type = "object",
+    required = { "path", "content" },
+    properties = {
+      path = { type = "string", description = "Project-relative path, or an absolute path inside the project root. Parent directories are created on apply." },
+      content = { type = "string", description = "Full content of the new file." },
+    },
+    additionalProperties = false,
+  },
+  run = complete_sync(function(args, opts)
+    opts = opts or {}
+    if type(args.content) ~= "string" then
+      return nil, "content is required"
+    end
+
+    local path, root = project_path(args.path)
+    if not path then
+      return nil, root
+    end
+    if vim.fn.filereadable(path) == 1 then
+      return nil, "File already exists: " .. path .. ". Use nvim_edit_file or nvim_preview_file_replace instead."
+    end
+    local existing_bufnr = vim.fn.bufnr(path)
+    if existing_bufnr ~= -1 and vim.api.nvim_buf_is_loaded(existing_bufnr) then
+      local existing = vim.api.nvim_buf_get_lines(existing_bufnr, 0, -1, false)
+      if #existing > 1 or (existing[1] or "") ~= "" then
+        return nil, "An unsaved buffer for this path already has content: " .. path
+      end
+    end
+
+    local replaced_action = ui.pending_action()
+    local replaced = replaced_action and replaced_action.kind or nil
+
+    local auto = ui.preview_create({
+      path = path,
+      content = args.content,
+      source = opts.source,
+    })
+
+    local result = {
+      action = "create_file",
+      root = root,
+      path = path,
+      line_count = #split_lines(args.content),
+      replaced_pending = replaced,
+    }
+
+    if auto then
+      if auto.err then
+        result.status = "apply_failed"
+        result.auto_applied = false
+        result.error = auto.err
+        result.message = "safety.auto_apply_edits is enabled but creating the file failed: " .. auto.err
+        return result
+      end
+      result.status = "applied"
+      result.auto_applied = true
+      result.written = auto.info and auto.info.written or false
+      result.message = (auto.info and auto.info.message or "The file was created.") .. replaced_pending_note(replaced)
+      return result
+    end
+
+    if not ui.pending_create then
+      return nil, "File creation preview did not create a pending action."
+    end
+
+    result.status = "previewed"
+    result.auto_applied = false
+    result.message = "Inspect the preview and run :AIApply to create the file or :AIReject to discard." .. replaced_pending_note(replaced)
     return result
   end),
 })

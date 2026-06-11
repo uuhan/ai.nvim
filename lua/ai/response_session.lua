@@ -214,6 +214,8 @@ local function map_keys()
       vim.cmd.stopinsert()
       M.send()
     end, { buffer = M.input_bufnr, nowait = true, silent = true, desc = "Send AI follow-up" })
+    vim.keymap.set("i", "<S-CR>", "<CR>", { buffer = M.input_bufnr, nowait = true, silent = true, desc = "AI follow-up newline" })
+    vim.keymap.set("i", "<C-j>", "<CR>", { buffer = M.input_bufnr, nowait = true, silent = true, desc = "AI follow-up newline" })
   end
 end
 

@@ -165,6 +165,7 @@ Chat:
 
 ```vim
 :AIChat {message}            " open side chat; optional message sends immediately
+:'<,'>AIChat [message]       " share the selection with the chat; with a message it sends immediately
 :AIPopChat {message}         " open floating chat; optional message sends immediately
 :AIChatToggle                " open or hide side chat
 :AIPopChatToggle             " open or hide floating chat
@@ -242,9 +243,20 @@ codex.md
 - `:AITools` exposes bounded Neovim context tools for the coding harness:
   editor state, buffers, files, selection, diagnostics, quickfix/location lists,
   symbol hover/definition/references, document/workspace symbols, code action
-  listing, git diff, project files/search, patch/command preview, and
-  buffer/file range replacement previews. Buffer and file read tools prefix
-  each line with its line number so the model can reference exact ranges.
+  listing, git diff, project files/search, structured `nvim_grep`/`nvim_glob`
+  search, patch/command preview, buffer/file range replacement previews,
+  exact-string file edits (`nvim_edit_file`), and new-file previews
+  (`nvim_create_file`). Buffer and file read tools prefix each line with its
+  line number so the model can reference exact ranges.
+- `nvim_edit_file` replaces exactly one occurrence of `old_string` with
+  `new_string`; ambiguous or missing matches return errors that guide the
+  model to add context, which is far more robust for LLMs than line-number
+  arithmetic or hand-built diffs.
+- When the chat tool loop hits `chat.max_tool_rounds`, the conversation is no
+  longer discarded: the model gets one final tool-free round to answer with
+  what it has gathered.
+- The API key is passed to curl through a private config file (`-K`), not
+  argv, so it does not show up in the process list.
 - `:AIFixBug` uses the same reviewable replacement-preview path as `:AIEdit`.
 - `:AIImplement` collects current editor context, diagnostics, language context,
   and relevant project search context, then creates a unified diff preview.
@@ -286,9 +298,14 @@ q close AI window
 `:AIChat` opens a right-side chat panel. `:AIPopChat` opens the same chat in a
 floating popup. The top pane shows the conversation, and the bottom pane is the
 input area. The conversation pane keeps focus in normal mode; press `i` or
-`<CR>` there to focus the input. Press `<CR>` or `<C-s>` in the input pane to send, `<C-c>` or
+`<CR>` there to focus the input. Press `<CR>` or `<C-s>` in the input pane to
+send, `<S-CR>` or `<C-j>` to insert a line break, `<C-c>` or
 `:AIChatStop` to stop the active request, `<C-l>` to clear the chat, and
-`<C-q>` or `q` to close the panel. The conversation pane shows a small status
+`<C-q>` or `q` to close the panel. With a visual range, `:'<,'>AIChat` shares
+the selection with the conversation; without a message it is recorded as
+context for your next question. While a response streams in, the view follows
+the output only if the cursor is at the bottom of the conversation pane, so
+you can scroll up and read without being yanked back down. The conversation pane shows a small status
 line such as `thinking`, `running tool`, or `idle`. The empty input pane shows
 configurable ghost text from `chat.placeholder`.
 

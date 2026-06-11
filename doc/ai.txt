@@ -110,9 +110,11 @@ The chat panel opens on the right. The top pane shows messages and the bottom
 pane is the input area. In the input pane:
   <CR>                      Send message.
   <C-s>                     Send message.
+  <S-CR> / <C-j>            Insert a line break.
   <C-l>                     Clear chat.
   <C-q>                     Close both chat panes.
   q                         Close both chat panes.
+With a visual range, :'<,'>AIChat shares the selection with the conversation.
 The empty input pane shows configurable ghost text from chat.placeholder.
 Chat history is persisted per project as JSONL files under
 stdpath("state")/ai.nvim/sessions; disable with chat.sessions.enabled = false.
@@ -156,7 +158,9 @@ available from Lua:
 
 Current tools include editor state, buffer/file reads, current selection,
 diagnostics, quickfix and location lists, git diff, project file listing,
-project search, patch preview, and command preview.
+project search, structured grep/glob search, patch preview, command preview,
+exact-string file edits (nvim_edit_file), and new-file previews
+(nvim_create_file).
 
 Preview tools prepare a pending action only. Patch tools still require
 :AIApply, and command tools still require :AIRun. Applied edits modify
