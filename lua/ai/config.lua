@@ -84,6 +84,8 @@ local defaults = {
     placeholder = "Input & Enter",
   },
   quick = {
+    keymap = "<leader>aq",
+    input = "float", -- "float": cursor-anchored popup; "native": vim.ui.input
     prompt = "AI: ",
     title = "ai.nvim",
     group = "ai.nvim.quick",

@@ -1357,6 +1357,14 @@ function M.setup()
   create_command("AITool", M.tool, { nargs = "*", range = false, complete = complete_tool_names })
   create_command("AIRules", M.show_rules, { nargs = 0, range = false })
   create_command("AIConfig", M.show_config, { nargs = 0, range = false })
+
+  local quick_keymap = (config.get().quick or {}).keymap
+  if quick_keymap and quick_keymap ~= "" then
+    -- normal mode: prompt for a task; visual mode: `:` seeds the '<,'> range so
+    -- the selection is shared as context.
+    vim.keymap.set("n", quick_keymap, "<Cmd>AIQuick<CR>", { silent = true, desc = "AI quick task" })
+    vim.keymap.set("x", quick_keymap, ":AIQuick<CR>", { silent = true, desc = "AI quick task (selection)" })
+  end
 end
 
 return M

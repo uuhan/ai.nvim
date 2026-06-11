@@ -58,11 +58,15 @@ return {
           file_types = { "markdown" },
         },
       },
+      -- Recommended: powers the compact :AIQuick status / tool-call / reply
+      -- notifications. Optional — ai.nvim falls back to vim.notify if absent.
+      { "j-hui/fidget.nvim", opts = {} },
     },
     keys = {
       { "<C-/>", ai_chat_toggle, mode = { "n", "i" }, desc = "Toggle AI chat" },
       { "<C-_>", ai_chat_toggle, mode = { "n", "i" }, desc = "Toggle AI chat" },
       { "<C-\\>", ai_pop_chat_toggle, mode = { "n", "i" }, desc = "Toggle AI popup chat" },
+      -- :AIQuick is bound to <leader>aq automatically (configure via quick.keymap).
     },
     opts = {
       system_prompt = "请使用中文回复对话。",
@@ -237,9 +241,16 @@ codex.md
 - AI-generated shell commands create previews by default. Use `:AIRun` after
   inspecting the command, or set `safety.auto_run_commands = true` to let command
   preview tools run immediately after the safety blocklist check.
-- `:AIQuick` uses `vim.ui.input` for the prompt and prefers `fidget.nvim` for
-  compact status, tool-call, and short reply notifications. Long replies open in
-  the existing AI popup.
+- `:AIQuick` opens a small input popup anchored at the cursor (`quick.input =
+  "float"`, the default): it starts in insert mode, submits on `<CR>`, and
+  closes on `<Esc>` or focus loss. Set `quick.input = "native"` to use
+  `vim.ui.input` instead (so a UI plugin such as snacks.nvim or dressing.nvim
+  can render it). Progress is reported through `fidget.nvim` when available
+  (compact status, tool-call, and short reply notifications), falling back to
+  `vim.notify` otherwise; long replies open in the existing AI popup. It is
+  bound to `<leader>aq` by default (normal mode prompts for a task; visual mode
+  shares the selection as context); set `quick.keymap` to another lhs or
+  `false` to change or disable it.
 - `:AISearchProject` uses `rg` when available. It does not maintain a vector
   database. Search terms are extracted from the question with stopword
   filtering and identifier-aware ranking, and up to three distinctive terms are

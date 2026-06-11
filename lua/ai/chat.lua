@@ -1078,6 +1078,10 @@ function M.stop()
   M.active_request = nil
   M.active = false
   set_status("stopped", "request cancelled")
+  if type(M.active_on_event) == "function" then
+    pcall(M.active_on_event, { type = "finish", status = "stopped", detail = "request cancelled" })
+  end
+  M.active_on_event = nil
 end
 
 function M.send(text, send_opts)
@@ -1086,6 +1090,8 @@ function M.send(text, send_opts)
   if text == "" or M.active then
     return
   end
+
+  M.active_on_event = send_opts.on_event
 
   local function emit(event)
     if type(send_opts.on_event) ~= "function" then

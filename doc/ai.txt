@@ -130,10 +130,14 @@ as Markdown callouts in the conversation. Patch and command tools only create
 previews; use :AIApply or :AIRun after inspection. Tool result details are
 folded by default; use normal fold keys such as zo, zc, and za.
 
-:AIQuick uses vim.ui.input for the prompt and the same harness tool loop as
-AIChat, but reports compact status, tool-call, and short reply updates through
-notifications. If fidget.nvim is available it is used directly; otherwise
-ai.nvim falls back to vim.notify. Long replies open in the existing AI popup.
+:AIQuick prompts with a small input popup anchored at the cursor (quick.input =
+"float", the default): it starts in insert mode, submits on <CR>, and closes on
+<Esc> or focus loss. Set quick.input = "native" to use vim.ui.input instead. It
+then runs the same harness tool loop as AIChat, but reports compact status,
+tool-call, and short reply updates through notifications. If fidget.nvim is
+available it is used directly; otherwise ai.nvim falls back to vim.notify. Long
+replies open in the existing AI popup. :AIQuick is bound to <leader>aq by
+default; configure it with quick.keymap.
 
 Harness tools:
   :AITools                  Show the model-facing Neovim tool registry.

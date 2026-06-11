@@ -106,6 +106,14 @@ local function event_notifier(task)
   end
 end
 
+local function busy()
+  if chat.active then
+    notify("AI quick is busy. Stop the active request with :AIChatStop first.", vim.log.levels.WARN, { annote = "busy" })
+    return true
+  end
+  return false
+end
+
 function M.run(text, opts)
   opts = opts or {}
   text = trim(text)
@@ -113,8 +121,7 @@ function M.run(text, opts)
     return
   end
 
-  if chat.active then
-    notify("AI quick is busy. Stop the active request with :AIChatStop first.", vim.log.levels.WARN, { annote = "busy" })
+  if busy() then
     return
   end
 
@@ -137,9 +144,84 @@ function M.run(text, opts)
   })
 end
 
+-- A single-line input popup anchored at the cursor. Closes on submit (<CR>),
+-- cancel (<Esc>), or focus loss, and starts in insert mode so it never strands
+-- the user in normal mode like the default vim.ui.input float can.
+local function float_input(opts, on_submit)
+  local quick = config.get().quick or {}
+  local prompt = trim(quick.prompt) ~= "" and trim(quick.prompt) or "AI:"
+  local default = tostring(opts.default or "")
+
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf].buftype = "nofile"
+  vim.bo[buf].bufhidden = "wipe"
+  vim.bo[buf].swapfile = false
+  if default ~= "" then
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { default })
+  end
+
+  local width = math.max(30, math.min(80, math.floor(vim.o.columns * 0.5)))
+  local ok, win = pcall(vim.api.nvim_open_win, buf, true, {
+    relative = "cursor",
+    row = 1,
+    col = 0,
+    width = width,
+    height = 1,
+    border = "rounded",
+    style = "minimal",
+    title = " " .. prompt:gsub("%s+$", "") .. " ",
+    title_pos = "left",
+    zindex = 70,
+  })
+  if not ok then
+    pcall(vim.api.nvim_buf_delete, buf, { force = true })
+    -- fall back to the native prompt if the float cannot be created
+    vim.ui.input({ prompt = quick.prompt or "AI: ", default = opts.default }, on_submit)
+    return
+  end
+  vim.wo[win].wrap = false
+
+  local done = false
+  local function finish(value)
+    if done then
+      return
+    end
+    done = true
+    if vim.fn.mode():match("^[iR]") then
+      vim.cmd.stopinsert()
+    end
+    if vim.api.nvim_win_is_valid(win) then
+      pcall(vim.api.nvim_win_close, win, true)
+    end
+    on_submit(value)
+  end
+
+  vim.keymap.set({ "i", "n" }, "<CR>", function()
+    finish(vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] or "")
+  end, { buffer = buf, nowait = true, silent = true })
+
+  vim.keymap.set({ "i", "n" }, "<Esc>", function()
+    finish(nil)
+  end, { buffer = buf, nowait = true, silent = true })
+
+  vim.api.nvim_create_autocmd({ "BufLeave", "WinLeave" }, {
+    buffer = buf,
+    once = true,
+    callback = function()
+      finish(nil)
+    end,
+  })
+
+  -- enter insert at end of any prefilled text
+  vim.cmd(default ~= "" and "startinsert!" or "startinsert")
+end
+
 function M.input(opts)
   opts = opts or {}
-  chat.start({ system_prompt = opts.system_prompt })
+
+  if busy() then
+    return
+  end
 
   local initial = trim(opts.initial)
   if initial ~= "" then
@@ -148,16 +230,22 @@ function M.input(opts)
   end
 
   local quick = config.get().quick or {}
-  vim.ui.input({
-    prompt = quick.prompt or "AI: ",
-    default = opts.default,
-  }, function(value)
+  local function handle(value)
     value = trim(value)
     if value == "" then
       return
     end
     M.run(value, opts)
-  end)
+  end
+
+  if quick.input == "native" then
+    vim.ui.input({
+      prompt = quick.prompt or "AI: ",
+      default = opts.default,
+    }, handle)
+  else
+    float_input(opts, handle)
+  end
 end
 
 return M
