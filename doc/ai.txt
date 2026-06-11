@@ -101,7 +101,12 @@ Agent plan:
 
 Chat:
   :AIChat {message}         Open side chat; optional message sends immediately.
+  :AIPopChat {message}      Open floating chat; optional message sends immediately.
+  :AIQuick [message]        Prompt for a short agent task and report progress
+                            through notifications.
   :AIChatToggle             Open or hide side chat.
+  :AIPopChatToggle          Open or hide floating chat.
+  :AIChatStop               Stop the active chat or quick request.
   :AIChatReset              Clear chat history (the saved session is kept).
   :AIChatResume             Restore the most recent saved session.
   :AIChatSessions           Pick a saved session to restore.
@@ -124,6 +129,11 @@ AIChat can call harness tools by default. Tool calls and tool results are shown
 as Markdown callouts in the conversation. Patch and command tools only create
 previews; use :AIApply or :AIRun after inspection. Tool result details are
 folded by default; use normal fold keys such as zo, zc, and za.
+
+:AIQuick uses vim.ui.input for the prompt and the same harness tool loop as
+AIChat, but reports compact status, tool-call, and short reply updates through
+notifications. If fidget.nvim is available it is used directly; otherwise
+ai.nvim falls back to vim.notify. Long replies open in the existing AI popup.
 
 Harness tools:
   :AITools                  Show the model-facing Neovim tool registry.

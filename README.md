@@ -1,12 +1,16 @@
-# ai.nvim
+# ai.nvim - Your coding agent inside neovim.
 
-![ai.nvim](./ai.png)
+![ai.nvim](./doc/quick.gif)
 
 ---
 
-![ai.nvim](./ai-pop.png)
+![ai.nvim](./doc/ai.png)
 
-A small Neovim AI assistant built around editor operations:
+---
+
+![ai.nvim](./doc/ai-pop.png)
+
+A Neovim AI assistant built around editor operations:
 
 - run prompts on a visual selection, paragraph, buffer, file, git diff, or project search context
 - preview AI edits as a unified diff before applying them
@@ -167,6 +171,7 @@ Chat:
 :AIChat {message}            " open side chat; optional message sends immediately
 :'<,'>AIChat [message]       " share the selection with the chat; with a message it sends immediately
 :AIPopChat {message}         " open floating chat; optional message sends immediately
+:AIQuick [message]           " prompt for a short agent task and report progress via notifications
 :AIChatToggle                " open or hide side chat
 :AIPopChatToggle             " open or hide floating chat
 :AIChatStop                  " stop the active chat request
@@ -232,6 +237,9 @@ codex.md
 - AI-generated shell commands create previews by default. Use `:AIRun` after
   inspecting the command, or set `safety.auto_run_commands = true` to let command
   preview tools run immediately after the safety blocklist check.
+- `:AIQuick` uses `vim.ui.input` for the prompt and prefers `fidget.nvim` for
+  compact status, tool-call, and short reply notifications. Long replies open in
+  the existing AI popup.
 - `:AISearchProject` uses `rg` when available. It does not maintain a vector
   database. Search terms are extracted from the question with stopword
   filtering and identifier-aware ranking, and up to three distinctive terms are

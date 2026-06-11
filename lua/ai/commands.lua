@@ -5,6 +5,7 @@ local config = require("ai.config")
 local context = require("ai.context")
 local locations = require("ai.locations")
 local popup = require("ai.popup")
+local quick = require("ai.quick")
 local response_session = require("ai.response_session")
 local stream_buffer = require("ai.stream_buffer")
 local target = require("ai.target")
@@ -1103,6 +1104,20 @@ function M.pop_chat(cmd)
   open_chat(cmd, "float")
 end
 
+function M.quick(cmd)
+  local block = chat_selection_block(cmd)
+  local initial = cmd.args or ""
+  if block and initial ~= "" then
+    initial = initial .. "\n\n" .. block
+  elseif block then
+    initial = "Use this selection as context:\n\n" .. block
+  end
+  quick.input({
+    initial = initial,
+    system_prompt = system_prompt,
+  })
+end
+
 function M.chat_toggle()
   chat_panel.toggle({ system_prompt = system_prompt })
 end
@@ -1327,6 +1342,7 @@ function M.setup()
   create_command("AIPlan", M.plan, { nargs = "?", range = false, complete = complete_plan_actions })
   create_command("AIChat", M.chat)
   create_command("AIPopChat", M.pop_chat)
+  create_command("AIQuick", M.quick)
   create_command("AIChatToggle", M.chat_toggle, { nargs = 0, range = false })
   create_command("AIPopChatToggle", M.pop_chat_toggle, { nargs = 0, range = false })
   create_command("AIChatStop", M.chat_stop, { nargs = 0, range = false })

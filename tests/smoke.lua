@@ -44,6 +44,7 @@ local commands = {
   "AISearchProject",
   "AIChat",
   "AIPopChat",
+  "AIQuick",
   "AIChatToggle",
   "AIPopChatToggle",
   "AIChatStop",

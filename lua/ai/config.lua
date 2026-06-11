@@ -83,6 +83,14 @@ local defaults = {
     input_title = " You ",
     placeholder = "Input & Enter",
   },
+  quick = {
+    prompt = "AI: ",
+    title = "ai.nvim",
+    group = "ai.nvim.quick",
+    use_fidget = true,
+    max_notify_chars = 600,
+    instruction = "Quick mode: use Neovim harness tools to complete the user's task when possible. For command-oriented tasks, use the command preview tool according to the configured safety settings instead of only describing commands. Keep the final reply short.",
+  },
   safety = {
     auto_apply_edits = false,
     auto_write_edits = false,

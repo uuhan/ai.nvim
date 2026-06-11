@@ -916,6 +916,8 @@ function M.continue_with_command_output(output)
   return true
 end
 
+local ensure_buffers
+
 function M.toggle(opts)
   opts = opts or {}
   local layout = opts.layout or "side"
@@ -925,6 +927,14 @@ function M.toggle(opts)
   end
 
   M.open(opts)
+end
+
+function M.start(opts)
+  opts = opts or {}
+  capture_target()
+  M.system_prompt = opts.system_prompt or M.system_prompt or function() return "You are an AI assistant embedded in Neovim." end
+  ensure_buffers()
+  return M
 end
 
 local function size_value(value, total, fallback, minimum)
@@ -1071,9 +1081,26 @@ function M.stop()
 end
 
 function M.send(text, send_opts)
+  send_opts = send_opts or {}
   text = (text or input_text()):gsub("^%s+", ""):gsub("%s+$", "")
   if text == "" or M.active then
     return
+  end
+
+  local function emit(event)
+    if type(send_opts.on_event) ~= "function" then
+      return
+    end
+    pcall(send_opts.on_event, event)
+  end
+
+  local function update_status(status, detail, extra)
+    set_status(status, detail, extra)
+    emit({
+      type = "status",
+      status = status or "idle",
+      detail = detail or "",
+    })
   end
 
   M.request_id = M.request_id + 1
@@ -1081,9 +1108,9 @@ function M.send(text, send_opts)
   M.active = true
   M.active_request = nil
   M.active_stream = nil
-  push_history({ role = "user", kind = send_opts and send_opts.kind or nil, content = text })
+  push_history({ role = "user", kind = send_opts.kind, content = text })
   reset_input()
-  set_status("thinking", "waiting for model", "## Assistant\n\n...")
+  update_status("thinking", "waiting for model", "## Assistant\n\n...")
 
   if config.get().chat.tools_enabled ~= false then
     local max_rounds = tonumber(config.get().chat.max_tool_rounds) or 20
@@ -1099,13 +1126,22 @@ function M.send(text, send_opts)
       M.active_request = nil
       M.active_stream = nil
       M.active = false
-      set_status(status or "idle", detail, extra)
+      update_status(status or "idle", detail, extra)
+      emit({
+        type = "finish",
+        status = status or "idle",
+        detail = detail or "",
+      })
     end
 
     local function append_assistant_text(content)
       content = (content or ""):gsub("^%s+", ""):gsub("%s+$", "")
       if content ~= "" then
         push_history({ role = "assistant", content = content })
+        emit({
+          type = "assistant",
+          content = content,
+        })
       end
     end
 
@@ -1137,10 +1173,21 @@ function M.send(text, send_opts)
         tool_call_id = call.tool_call_id,
         reasoning_content = call.reasoning_content,
       })
-      set_status("running tool", call.tool, tool_running_card(call.tool))
+      emit({
+        type = "tool_call",
+        tool = call.tool,
+        args = call.args,
+      })
+      update_status("running tool", call.tool, tool_running_card(call.tool))
 
       if call.error then
         append_tool_result(call, call.error)
+        emit({
+          type = "tool_result",
+          tool = call.tool,
+          error = true,
+          summary = call.error,
+        })
         execute_calls(calls, index + 1, next_tool_round + 1, done)
         return
       end
@@ -1149,10 +1196,17 @@ function M.send(text, send_opts)
         if stale() then
           return
         end
+        local summary = tool_result_summary(call, tool_err, result)
         append_tool_result(call, tool_err, result)
-        set_status("thinking", "tool result ready")
+        emit({
+          type = "tool_result",
+          tool = call.tool,
+          error = tool_err ~= nil,
+          summary = summary,
+        })
+        update_status("thinking", "tool result ready")
         execute_calls(calls, index + 1, next_tool_round + 1, done)
-      end, { source = "chat" })
+      end, { source = send_opts.source or "chat" })
     end
 
     local request_next
@@ -1203,7 +1257,7 @@ function M.send(text, send_opts)
         opts.tool_choice = "auto"
       end
 
-      set_status("thinking", "waiting for model", "## Assistant\n\n...")
+      update_status("thinking", "waiting for model", "## Assistant\n\n...")
 
       if config.get().provider.stream then
         local assistant = ""
@@ -1223,7 +1277,7 @@ function M.send(text, send_opts)
               return
             end
             assistant = text
-            set_status("streaming", "receiving response", "## Assistant\n\n" .. assistant)
+            update_status("streaming", "receiving response", "## Assistant\n\n" .. assistant)
           end,
           on_done = function(text)
             if stale() then
@@ -1258,7 +1312,7 @@ function M.send(text, send_opts)
             end
             append_stream_tool_call_delta(stream_calls, deltas)
             if assistant == "" and not renderer.has_pending() then
-              set_status("streaming", "receiving tool call", "## Assistant\n\n...")
+              update_status("streaming", "receiving tool call", "## Assistant\n\n...")
             end
           end,
           on_error = function(err)
@@ -1320,7 +1374,7 @@ function M.send(text, send_opts)
           return
         end
         assistant = text
-        set_status("streaming", "receiving response", "## Assistant\n\n" .. assistant)
+        update_status("streaming", "receiving response", "## Assistant\n\n" .. assistant)
       end,
       on_done = function(text)
         if stale() then
@@ -1332,7 +1386,16 @@ function M.send(text, send_opts)
         M.active_request = nil
         M.active = false
         push_history({ role = "assistant", content = assistant })
-        set_status("idle")
+        emit({
+          type = "assistant",
+          content = assistant,
+        })
+        update_status("idle")
+        emit({
+          type = "finish",
+          status = "idle",
+          detail = "",
+        })
       end,
     })
     M.active_stream = renderer
@@ -1355,7 +1418,12 @@ function M.send(text, send_opts)
         clear_renderer()
         M.active_request = nil
         M.active = false
-        set_status("error", "stream failed", "## Error\n\n" .. err)
+        update_status("error", "stream failed", "## Error\n\n" .. err)
+        emit({
+          type = "finish",
+          status = "error",
+          detail = "stream failed",
+        })
       end,
       on_done = function()
         if stale() then
@@ -1379,11 +1447,25 @@ function M.send(text, send_opts)
     M.active_request = nil
     M.active = false
     if err then
-      set_status("error", "model request failed", "## Error\n\n" .. err)
+      update_status("error", "model request failed", "## Error\n\n" .. err)
+      emit({
+        type = "finish",
+        status = "error",
+        detail = "model request failed",
+      })
       return
     end
     push_history({ role = "assistant", content = response })
-    set_status("idle")
+    emit({
+      type = "assistant",
+      content = response,
+    })
+    update_status("idle")
+    emit({
+      type = "finish",
+      status = "idle",
+      detail = "",
+    })
   end)
 end
 
@@ -1435,7 +1517,7 @@ local function map_messages_keys()
   vim.keymap.set({ "n", "i" }, "<C-q>", M.close, vim.tbl_extend("force", opts, { desc = "AI chat close" }))
 end
 
-local function ensure_buffers()
+function ensure_buffers()
   if not M.target_autocmd then
     M.target_autocmd = true
     vim.api.nvim_create_autocmd({ "WinEnter", "BufEnter" }, {
@@ -1470,9 +1552,7 @@ end
 function M.open(opts)
   opts = opts or {}
   local layout = opts.layout or "side"
-  capture_target()
-  M.system_prompt = opts.system_prompt or M.system_prompt or function() return "You are an AI assistant embedded in Neovim." end
-  ensure_buffers()
+  M.start(opts)
 
   local sessions_cfg = config.get().chat.sessions or {}
   if sessions_cfg.enabled ~= false
