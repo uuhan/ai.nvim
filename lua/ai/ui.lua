@@ -135,6 +135,23 @@ local function set_winbar(bufnr, value)
   end
 end
 
+-- Close the window(s) showing a preview buffer. Used after a command preview is
+-- accepted so the (now stale) preview does not linger.
+local function close_preview(bufnr)
+  if not bufnr then
+    return
+  end
+  for _, win in ipairs(vim.fn.win_findbuf(bufnr)) do
+    if vim.api.nvim_win_is_valid(win) then
+      if popup.winid == win then
+        popup.close()
+      else
+        pcall(vim.api.nvim_win_close, win, true)
+      end
+    end
+  end
+end
+
 function M.open_output(title, text, filetype)
   local bufnr = focus_or_open_output()
   set_scratch_options(bufnr, filetype)
@@ -529,6 +546,9 @@ function M.preview_command(opts)
     bufnr = M.open_output(opts.title or "command-preview", text, "markdown")
   end
 
+  -- Remember the preview window so it can be closed once the command runs.
+  pending.output_bufnr = bufnr
+
   -- A fixed top-of-window hint so the accept/reject shortcuts are visible
   -- without scrolling. set_output above cleared any previous winbar first.
   local hint = ("%%#Title# %s accept · %s reject · %s close %%*"):format(accept_key, reject_key, close_key)
@@ -701,6 +721,8 @@ function M.run_pending_command()
       M.notify(err, vim.log.levels.ERROR)
       return
     end
+    -- The command ran (whatever its exit code); drop the stale preview window.
+    close_preview(pending and pending.output_bufnr)
     if result and result.code ~= 0 then
       local detail = vim.trim(result.stderr ~= "" and result.stderr or result.stdout)
       M.notify(
