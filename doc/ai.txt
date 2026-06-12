@@ -152,7 +152,8 @@ Config:
   :AIRules                  Show included project rules.
 
 AI output buffers are reused by default. Local normal-mode keys:
-  a                         Apply pending edit or patch.
+  a                         Accept pending action: apply an edit/patch, or run
+                            a pending command (e.g. :AICommit).
   r                         Reject pending action.
   n                         Preview next agent step.
   p                         Preview next patch step.

@@ -239,9 +239,12 @@ codex.md
   `chat.max_full_tool_results` tool results are sent to the model in full;
   older ones collapse to their one-line summary. The visible chat rendering is
   unaffected.
-- AI-generated shell commands create previews by default. Use `:AIRun` after
-  inspecting the command, or set `safety.auto_run_commands = true` to let command
-  preview tools run immediately after the safety blocklist check.
+- AI-generated shell commands create previews by default. The preview shows a
+  top-of-window hint; press `a` to run (or `:AIRun`) and `r` to reject (or
+  `:AIReject`) after inspecting the command, or set `safety.auto_run_commands =
+  true` to let command preview tools run immediately after the safety blocklist
+  check. Command results are reported via a notification (success or error)
+  rather than a separate output window.
 - `:AIQuick` opens a small input popup anchored at the cursor (`quick.input =
   "float"`, the default): it starts in insert mode, submits on `<CR>`, and
   closes on `<Esc>` or focus loss. Set `quick.input = "native"` to use
@@ -305,7 +308,7 @@ codex.md
 AI output buffers are reused by default and expose local normal-mode keys:
 
 ```text
-a apply pending edit or patch
+a accept pending action (apply edit/patch, or run a command like :AICommit)
 r reject pending action
 n preview next agent step
 p preview next patch step
