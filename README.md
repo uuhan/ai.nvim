@@ -146,8 +146,8 @@ Diagnostics and git:
 :AIExplainDiff
 :AIFindBugInDiff
 :AICommitMessage             " generate a commit message (shown only, no commit)
-:AICommit                    " write a message from all tracked changes and
-                             " preview `git commit -a`; press a to commit, r to reject
+:AICommit                    " write a message from all changes (incl. new files)
+                             " and preview `git add -A && git commit`; a commit, r reject
 ```
 
 Shell commands:

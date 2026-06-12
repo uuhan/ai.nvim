@@ -82,10 +82,10 @@ Diagnostics and git:
   :AIExplainDiff            Explain git diff and staged diff.
   :AIFindBugInDiff          Search git diff for likely bugs.
   :AICommitMessage          Generate a commit message (shown only, no commit).
-  :AICommit                 Generate a commit message from all tracked changes
-                            and preview `git commit -a` for review; press a to
-                            accept (commit) or r to reject (:AIRun / :AIReject
-                            also work).
+  :AICommit                 Generate a commit message from all changes (including
+                            new files) and preview `git add -A && git commit` for
+                            review; press a to accept (commit) or r to reject
+                            (:AIRun / :AIReject also work).
 
 Shell commands:
   :AICmd {task}              Generate a shell command for review.

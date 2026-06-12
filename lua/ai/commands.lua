@@ -883,7 +883,7 @@ function M.commit()
       return
     end
     if diff:gsub("%s+", "") == "#gitstatus--short#gitdiff#gitdiff--cached" then
-      set_response_output(bufnr, "commit", "No tracked changes to commit.", { output = "popup", session = false })
+      set_response_output(bufnr, "commit", "No changes to commit.", { output = "popup", session = false })
       return
     end
 
@@ -908,7 +908,9 @@ function M.commit()
         return
       end
 
-      local command = "git commit -a -F " .. shell_single_quote(tmp)
+      -- Stage everything (including new files) so the commit covers all changes,
+      -- not just tracked ones. Single line keeps runner.preview happy.
+      local command = "git add -A && git commit -F " .. shell_single_quote(tmp)
       local note = table.concat({ "Commit message:", "", "```", msg, "```" }, "\n")
       ui.preview_command({
         title = "commit",
