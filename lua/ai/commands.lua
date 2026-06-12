@@ -835,6 +835,92 @@ function M.commit_message()
   git_request("commit-message", "Write a concise commit message for this diff. Return only the commit message.", nil, { output = "popup" })
 end
 
+local GIT_COMMIT_MESSAGE_PROMPT = [[You write accurate Git commit messages for software changes.
+
+<task>
+Read the repository snapshot and produce the exact commit message text that should be used for `git commit`.
+</task>
+
+<analysis_contract>
+- Understand the semantic intent of the changes before naming them.
+- Choose the dominant type prefix from: feat, fix, refactor, perf, docs, test, chore.
+- Prefer `fix` for behavior corrections or regressions, `feat` for new capabilities, `refactor` for structural cleanup without behavior change, and the other labels only when they are clearly the best fit.
+- Summarize concrete behavior and scope, not vague implementation trivia.
+- If there are several related changes, group them into concise markdown bullet points in the body.
+- Mention `TODO` only when the provided snapshot clearly shows intentional follow-up work or a partial implementation.
+- Never invent files, behaviors, or outcomes that are not supported by the snapshot.
+</analysis_contract>
+
+<style>
+- Output plain commit message text only.
+- First line format: `<type>: <summary>`.
+- Keep the subject line under 72 characters when reasonably possible.
+- If a body helps, leave one blank line after the subject and use markdown `- ` bullets.
+- Keep the body precise and detailed, usually 3 to 6 bullets.
+- Do not wrap the message in code fences or add any explanation outside the commit message itself.
+</style>
+
+<output_contract>
+Return exactly the commit message to pass to `git commit -m`, preserving internal newlines when needed.
+</output_contract>
+
+<section_precedence>
+If sections conflict, follow output_contract, then style, then analysis_contract, then task.
+</section_precedence>]]
+
+-- POSIX single-quote escaping so a generated message is safe to embed in the
+-- previewed `git commit` command regardless of its content.
+local function shell_single_quote(value)
+  return "'" .. tostring(value or ""):gsub("'", "'\\''") .. "'"
+end
+
+function M.commit()
+  local root = context.root(0)
+  local bufnr = open_response_output("commit", "Reading changes...", { output = "popup", session = false })
+  context.git_diff(function(err, diff)
+    if err then
+      set_response_output(bufnr, "commit-error", err, { output = "popup", session = false })
+      return
+    end
+    if diff:gsub("%s+", "") == "#gitstatus--short#gitdiff#gitdiff--cached" then
+      set_response_output(bufnr, "commit", "No tracked changes to commit.", { output = "popup", session = false })
+      return
+    end
+
+    local req = {
+      { role = "system", content = GIT_COMMIT_MESSAGE_PROMPT },
+      { role = "user", content = "Repository snapshot:\n\n" .. diff },
+    }
+    request_output("commit", req, { output = "popup", session = false }, bufnr, function(text, output_bufnr)
+      local msg = vim.trim(text or "")
+      if msg == "" then
+        set_response_output(output_bufnr, "commit", "AI returned an empty commit message.", { output = "popup", session = false })
+        return
+      end
+
+      -- Pass the message via a temp file so any content (multi-line bodies,
+      -- quotes, backticks) is safe and the previewed command stays single-line
+      -- for runner.preview, which only keeps the first line of a command.
+      local tmp = vim.fn.tempname()
+      local ok = pcall(vim.fn.writefile, vim.split(msg, "\n", { plain = true }), tmp)
+      if not ok then
+        set_response_output(output_bufnr, "commit-error", "Failed to write the commit message file.", { output = "popup", session = false })
+        return
+      end
+
+      local command = "git commit -a -F " .. shell_single_quote(tmp)
+      local note = table.concat({ "Commit message:", "", "```", msg, "```" }, "\n")
+      ui.preview_command({
+        title = "commit",
+        command = command,
+        cwd = root,
+        output_bufnr = output_bufnr,
+        note = note,
+      })
+    end)
+  end, root)
+end
+
 function M.search_project(cmd)
   local prompt = user_prompt(cmd, "Answer the question using project context.")
   local root = context.root(0)
@@ -875,7 +961,7 @@ local function command_request(title, prompt)
   end)
 end
 
-local function command_prompt(cmd, mode)
+local function command_prompt(cmd)
   local task = user_prompt(cmd, "Generate a useful command for the current project.")
   local constraints = {
     "Generate exactly one shell command for the user's task.",
@@ -883,10 +969,6 @@ local function command_prompt(cmd, mode)
     "Do not include destructive commands.",
     "Assume the command will be reviewed before execution.",
   }
-
-  if mode == "git" then
-    table.insert(constraints, "The command must be a git command.")
-  end
 
   return table.concat(vim.list_extend(constraints, {
     "",
@@ -899,11 +981,7 @@ local function command_prompt(cmd, mode)
 end
 
 function M.cmd(cmd)
-  command_request("command", command_prompt(cmd, "shell"))
-end
-
-function M.git_cmd(cmd)
-  command_request("git-command", command_prompt(cmd, "git"))
+  command_request("command", command_prompt(cmd))
 end
 
 local function agent_prompt(task, root, buf, diagnostics, quickfix, git_diff, project_context)
@@ -1337,7 +1415,7 @@ function M.setup()
   create_command("AICommitMessage", M.commit_message, { nargs = 0, range = false })
   create_command("AISearchProject", M.search_project, { range = false })
   create_command("AICmd", M.cmd, { range = false })
-  create_command("AIGit", M.git_cmd, { range = false })
+  create_command("AICommit", M.commit, { nargs = 0, range = false })
   create_command("AIAgent", M.agent, { range = false })
   create_command("AIPlan", M.plan, { nargs = "?", range = false, complete = complete_plan_actions })
   create_command("AIChat", M.chat)

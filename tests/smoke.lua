@@ -36,7 +36,7 @@ local commands = {
   "AIReject",
   "AIRun",
   "AICmd",
-  "AIGit",
+  "AICommit",
   "AIAgent",
   "AIPlan",
   "AIFixAllDiagnostics",

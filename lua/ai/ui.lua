@@ -484,17 +484,29 @@ function M.preview_command(opts)
   M.pending_patch = nil
   M.pending_create = nil
 
-  local text = table.concat({
+  local keys = config.get().ui.buffer_keymaps or {}
+  local accept_key = keys.apply or "a"
+  local reject_key = keys.reject or "r"
+  local lines = {
     "# AI command preview",
     "",
-    "Inspect the command, then run :AIRun or :AIReject.",
+    ("Press %s to accept (run) or %s to reject. (:AIRun / :AIReject also work.)"):format(accept_key, reject_key),
     "",
+  }
+  if opts.note and opts.note ~= "" then
+    for _, line in ipairs(vim.split(opts.note, "\n", { plain = true })) do
+      lines[#lines + 1] = line
+    end
+    lines[#lines + 1] = ""
+  end
+  vim.list_extend(lines, {
     "CWD: " .. pending.cwd,
     "",
     "```sh",
     pending.command,
     "```",
-  }, "\n")
+  })
+  local text = table.concat(lines, "\n")
 
   if opts.output_bufnr then
     M.set_output(opts.output_bufnr, opts.title or "command-preview", text, "markdown")
@@ -603,6 +615,13 @@ function M.apply_pending(cb)
 
   local edit = M.pending_edit
   if not edit then
+    -- Accept a pending command (e.g. :AICommit) so the same accept key works
+    -- for command previews. Only for user-initiated accepts (no cb), never for
+    -- chat tool applies.
+    if not cb and runner.pending then
+      M.run_pending_command()
+      return
+    end
     M.notify("No pending AI edit.", vim.log.levels.WARN)
     if cb then
       cb("No pending AI edit.")

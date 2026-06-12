@@ -145,14 +145,15 @@ Diagnostics and git:
 :AIReviewDiff
 :AIExplainDiff
 :AIFindBugInDiff
-:AICommitMessage
+:AICommitMessage             " generate a commit message (shown only, no commit)
+:AICommit                    " write a message from all tracked changes and
+                             " preview `git commit -a`; press a to commit, r to reject
 ```
 
 Shell commands:
 
 ```vim
 :AICmd {task}                " generate a shell command for review
-:AIGit {task}                " generate a git command
 :AIRun                       " run the latest generated command
 ```
 

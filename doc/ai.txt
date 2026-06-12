@@ -81,12 +81,15 @@ Diagnostics and git:
   :AIReviewDiff             Review git diff and staged diff.
   :AIExplainDiff            Explain git diff and staged diff.
   :AIFindBugInDiff          Search git diff for likely bugs.
-  :AICommitMessage          Generate a commit message.
+  :AICommitMessage          Generate a commit message (shown only, no commit).
+  :AICommit                 Generate a commit message from all tracked changes
+                            and preview `git commit -a` for review; press a to
+                            accept (commit) or r to reject (:AIRun / :AIReject
+                            also work).
 
 Shell commands:
   :AICmd {task}              Generate a shell command for review.
   :AIShell {task}            Alias for :AICmd.
-  :AIGit {task}              Generate a git command for review.
   :AIRun                     Run the latest generated command.
 
 Agent plan:
