@@ -125,6 +125,16 @@ local function focus_or_open_output()
   return bufnr
 end
 
+local function set_winbar(bufnr, value)
+  for _, win in ipairs(vim.fn.win_findbuf(bufnr)) do
+    if vim.api.nvim_win_is_valid(win) then
+      pcall(function()
+        vim.wo[win].winbar = value
+      end)
+    end
+  end
+end
+
 function M.open_output(title, text, filetype)
   local bufnr = focus_or_open_output()
   set_scratch_options(bufnr, filetype)
@@ -155,6 +165,9 @@ function M.set_output(bufnr, title, text, filetype)
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
   vim.bo[bufnr].modifiable = false
   scroll_to_bottom(bufnr)
+  -- Clear any action hint left over from a previous command/patch preview so a
+  -- reused output window does not keep showing stale shortcuts.
+  set_winbar(bufnr, "")
   return bufnr
 end
 
@@ -487,6 +500,7 @@ function M.preview_command(opts)
   local keys = config.get().ui.buffer_keymaps or {}
   local accept_key = keys.apply or "a"
   local reject_key = keys.reject or "r"
+  local close_key = keys.close or "q"
   local lines = {
     "# AI command preview",
     "",
@@ -508,11 +522,17 @@ function M.preview_command(opts)
   })
   local text = table.concat(lines, "\n")
 
-  if opts.output_bufnr then
-    M.set_output(opts.output_bufnr, opts.title or "command-preview", text, "markdown")
+  local bufnr = opts.output_bufnr
+  if bufnr then
+    M.set_output(bufnr, opts.title or "command-preview", text, "markdown")
   else
-    M.open_output(opts.title or "command-preview", text, "markdown")
+    bufnr = M.open_output(opts.title or "command-preview", text, "markdown")
   end
+
+  -- A fixed top-of-window hint so the accept/reject shortcuts are visible
+  -- without scrolling. set_output above cleared any previous winbar first.
+  local hint = ("%%#Title# %s accept · %s reject · %s close %%*"):format(accept_key, reject_key, close_key)
+  set_winbar(bufnr, hint)
 end
 
 --- Apply the pending edit or patch.
