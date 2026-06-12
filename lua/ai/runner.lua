@@ -97,7 +97,11 @@ function M.run(cb)
         obj.stderr or "",
       }, "\n")
       M.pending = nil
-      cb(nil, output, pending)
+      cb(nil, output, pending, {
+        code = obj.code,
+        stdout = obj.stdout or "",
+        stderr = obj.stderr or "",
+      })
     end)
   end)
 end

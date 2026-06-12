@@ -696,13 +696,21 @@ end
 
 function M.run_pending_command()
   M.notify("Running AI command...")
-  runner.run(function(err, output, pending)
+  runner.run(function(err, output, pending, result)
     if err then
       M.notify(err, vim.log.levels.ERROR)
-      M.open_output("command-error", err)
       return
     end
-    M.open_output("command-output", output, "markdown")
+    if result and result.code ~= 0 then
+      local detail = vim.trim(result.stderr ~= "" and result.stderr or result.stdout)
+      M.notify(
+        ("AI command failed (exit %d)%s"):format(result.code, detail ~= "" and (": " .. detail) or ""),
+        vim.log.levels.ERROR
+      )
+    else
+      local detail = vim.trim((result and result.stdout) or "")
+      M.notify(detail ~= "" and detail or "AI command finished.")
+    end
     if pending and pending.source == "chat" then
       local ok, chat = pcall(require, "ai.chat")
       if ok and type(chat.continue_with_command_output) == "function" then
