@@ -1990,4 +1990,97 @@ assert(run_step.status == "ready", "command step should be ready after preview")
 assert(agent.skip())
 assert(not agent.preview_next(), "agent should have no pending steps")
 
+-- Tree-sitter code context: boundaries, outline, scope (Phases 1-3).
+do
+  local ts = require("ai.treesitter")
+  local ts_buffers = {}
+  local function ts_buf(lines, ft)
+    vim.cmd("new")
+    local b = vim.api.nvim_get_current_buf()
+    vim.api.nvim_buf_set_lines(b, 0, -1, false, lines)
+    vim.bo[b].filetype = ft
+    table.insert(ts_buffers, b)
+    return b
+  end
+
+  -- enclosing_range: explicit line is decoupled from the window cursor.
+  local plain = ts_buf({ "local x = 1", "local function foo()", "  return 1", "end" }, "lua")
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  assert(ts.enclosing_range(plain, 1) == nil, "ts enclosing_range outside a function should be nil")
+  local fr1, fr2 = ts.enclosing_range(plain, 3)
+  assert(fr1 == 2 and fr2 == 4, "ts enclosing_range should find foo (2-4) by explicit line")
+
+  -- symbols: wrapper-artifact dedup keeps real, named, nested symbols.
+  local nested = ts_buf({
+    "local function outer()",
+    "  local function inner()",
+    "    return 1",
+    "  end",
+    "  return inner",
+    "end",
+    "local function sibling()",
+    "  return 2",
+    "end",
+  }, "lua")
+  local syms = ts.symbols(nested)
+  assert(#syms == 3, "ts symbols should dedup to 3 real symbols, got " .. #syms)
+  assert(syms[1].name == "outer" and syms[2].name == "inner" and syms[3].name == "sibling", "ts symbols name/order")
+
+  -- outline: nested indentation, siblings back at depth 0.
+  local outline = context.outline(nested)
+  assert(outline:match("^function outer %[1%-6%]"), "ts outline: outer at depth 0")
+  assert(outline:match("\n  function inner %[2%-4%]"), "ts outline: inner indented one level")
+  assert(outline:match("\nfunction sibling %[7%-9%]"), "ts outline: sibling back at depth 0")
+
+  -- imports + enclosing scope + scope_context (C).
+  local cbuf = ts_buf({
+    "#include <stdio.h>",
+    '#include "foo.h"',
+    "int main(void) {",
+    "  return 0;",
+    "}",
+  }, "c")
+  assert(#ts.imports(cbuf) == 2, "ts imports should find 2 includes")
+  local cscopes = ts.enclosing_scopes(cbuf, 4)
+  assert(#cscopes == 1 and cscopes[1].line1 == 3, "ts enclosing_scopes should find main")
+  local sc = context.scope_context(cbuf, 4)
+  assert(sc:match("Imports:") and sc:match("#include <stdio.h>"), "scope_context should include imports")
+  assert(sc:match("Enclosing scope:"), "scope_context should include the scope chain")
+
+  -- nested scope chain is outermost-first and keeps an anonymous scope.
+  local anon = ts_buf({
+    "local function wrap()",
+    "  local f = function()",
+    "    return 1",
+    "  end",
+    "  return f",
+    "end",
+  }, "lua")
+  local ascopes = ts.enclosing_scopes(anon, 3)
+  assert(#ascopes == 2 and ascopes[1].name == "wrap", "scope chain should be outermost-first")
+  assert(ascopes[2].line1 == 2 and ascopes[2].line2 == 4, "anonymous inner scope should be retained")
+
+  -- selection_context captures scope by default and skips it on request.
+  vim.api.nvim_set_current_buf(cbuf)
+  vim.api.nvim_win_set_cursor(0, { 4, 2 })
+  assert(context.selection_context({ range = 0 }).scope_context ~= "", "selection_context should capture scope by default")
+  assert(
+    context.selection_context({ range = 0 }, { scope = false }).scope_context == "",
+    "selection_context scope=false should skip scope"
+  )
+
+  -- long signatures are truncated and the scope text stays bounded.
+  local longsig = ts_buf({ "local function f(" .. string.rep("a", 300) .. ")", "  return 1", "end" }, "lua")
+  local long_scope = context.scope_context(longsig, 2)
+  assert(long_scope:match("…"), "scope_context should truncate a very long signature")
+  assert(#long_scope < 400, "scope_context should stay bounded")
+
+  vim.api.nvim_set_current_buf(tool_buf)
+  for _, b in ipairs(ts_buffers) do
+    if vim.api.nvim_buf_is_valid(b) then
+      vim.api.nvim_buf_delete(b, { force = true })
+    end
+  end
+end
+
 print("ai.nvim smoke ok")
