@@ -62,7 +62,6 @@ Core:
   :AIExplain                Explain selected/current code.
   :AIEdit {instruction}     Generate replacement text and preview a diff.
   :AIRefactor               Refactor selected/current code.
-  :AIFix                    Fix selected/current code.
   :AITest                   Suggest focused tests.
   :AIApply                  Apply the latest AI edit preview.
   :AIReject                 Clear the latest AI edit preview.
@@ -79,9 +78,6 @@ Diagnostics and git:
   :AIFixAllDiagnostics      Ask for a patch for loaded-buffer diagnostics.
   :AIFixQuickfix            Ask about the quickfix list.
   :AIReviewDiff             Review git diff and staged diff.
-  :AIExplainDiff            Explain git diff and staged diff.
-  :AIFindBugInDiff          Search git diff for likely bugs.
-  :AICommitMessage          Generate a commit message (shown only, no commit).
   :AICommit                 Generate a commit message from all changes (including
                             new files) and preview `git add -A && git commit` for
                             review; press a to accept (commit) or r to reject

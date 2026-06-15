@@ -622,10 +622,6 @@ function M.refactor(cmd)
   edit_selection(cmd, user_prompt(cmd, "Refactor this code for clarity while preserving behavior."))
 end
 
-function M.fix(cmd)
-  edit_selection(cmd, user_prompt(cmd, "Fix bugs in this code while preserving the public contract."))
-end
-
 function M.fix_bug(cmd)
   edit_selection(cmd, user_prompt(cmd, table.concat({
     "Fix concrete correctness bugs in this code with the smallest safe replacement.",
@@ -816,23 +812,6 @@ function M.review_diff()
       ui.notify(("Added %d AI review locations."):format(count))
     end
   end, { output = "popup" })
-end
-
-function M.explain_diff()
-  git_request("diff-explain", "Explain what changed in this git diff. Keep it concise and developer-facing.", nil, { output = "popup" })
-end
-
-function M.find_bug_in_diff()
-  git_request("diff-bugs", "Look for likely bugs in this git diff. Be strict. If there are no clear bugs, say so. Use file:line references for findings.", function(text, _, root)
-    local count = locations.populate(text, "AI diff bugs", root)
-    if count > 0 then
-      ui.notify(("Added %d AI bug locations."):format(count))
-    end
-  end, { output = "popup" })
-end
-
-function M.commit_message()
-  git_request("commit-message", "Write a concise commit message for this diff. Return only the commit message.", nil, { output = "popup" })
 end
 
 local GIT_COMMIT_MESSAGE_PROMPT = [[You write accurate Git commit messages for software changes.
@@ -1402,7 +1381,6 @@ function M.setup()
   create_command("AIFixBug", M.fix_bug)
   create_command("AIImplement", M.implement)
   create_command("AIRefactor", M.refactor)
-  create_command("AIFix", M.fix)
   create_command("AIEdit", M.edit)
   create_command("AIComment", M.comment)
   create_command("AITest", M.test)
@@ -1412,9 +1390,6 @@ function M.setup()
   create_command("AIFixAllDiagnostics", M.fix_all_diagnostics, { nargs = 0, range = false })
   create_command("AIFixQuickfix", M.fix_quickfix, { nargs = 0, range = false })
   create_command("AIReviewDiff", M.review_diff, { nargs = 0, range = false })
-  create_command("AIExplainDiff", M.explain_diff, { nargs = 0, range = false })
-  create_command("AIFindBugInDiff", M.find_bug_in_diff, { nargs = 0, range = false })
-  create_command("AICommitMessage", M.commit_message, { nargs = 0, range = false })
   create_command("AISearchProject", M.search_project, { range = false })
   create_command("AICmd", M.cmd, { range = false })
   create_command("AICommit", M.commit, { nargs = 0, range = false })

@@ -109,7 +109,6 @@ Core editing:
 :AIEdit {instruction}        " generate replacement and preview diff
 :AIComment [instruction]     " add useful comments and preview diff
 :AIRefactor                  " refactor selected/current code
-:AIFix                       " fix selected/current code
 :AITest                      " suggest tests for selected/current code
 :AIApply                     " apply the latest AI edit preview
 :AIReject                    " clear the latest AI edit preview
@@ -117,8 +116,7 @@ Core editing:
 
 Read-only one-shot commands render their response in a floating Markdown result
 session. This includes `:AI`, `:AIExplain`, `:AIFindBug`, `:AITest`,
-`:AIBuffer`, `:AISummarizeFile`, `:AISearchProject`, `:AIReviewDiff`,
-`:AIExplainDiff`, `:AIFindBugInDiff`, and `:AICommitMessage`.
+`:AIBuffer`, `:AISummarizeFile`, `:AISearchProject`, and `:AIReviewDiff`.
 The bottom input lets you continue the same request as a lightweight follow-up
 conversation, so you can challenge a finding or ask for clarification without
 recollecting context. The response pane keeps focus in normal mode; press `i`
@@ -143,9 +141,6 @@ Diagnostics and git:
 :AIFixAllDiagnostics
 :AIFixQuickfix
 :AIReviewDiff
-:AIExplainDiff
-:AIFindBugInDiff
-:AICommitMessage             " generate a commit message (shown only, no commit)
 :AICommit                    " write a message from all changes (incl. new files)
                              " and preview `git add -A && git commit`; a commit, r reject
 ```
@@ -261,8 +256,8 @@ codex.md
   searched.
 - `:AIReviewDiff` and related commands read `git diff`, `git diff --cached`, and
   `git status --short`.
-- `:AIReviewDiff` and `:AIFindBugInDiff` parse `file:line` references from the
-  AI response and place them in the location list when possible.
+- `:AIReviewDiff` parses `file:line` references from the AI response and places
+  them in the location list when possible.
 - `:AITools` exposes bounded Neovim context tools for the coding harness:
   editor state, buffers, files, selection, diagnostics, quickfix/location lists,
   symbol hover/definition/references, document/workspace symbols, code action
@@ -353,7 +348,7 @@ for later tools.
 Language-aware tools serve code understanding directly: they expose hover text,
 definitions, references, symbols, and code action titles without asking the
 model to reason about language service internals.
-One-shot commands such as `:AIExplain`, `:AIEdit`, `:AIFix`, `:AIRefactor`,
+One-shot commands such as `:AIExplain`, `:AIEdit`, `:AIRefactor`,
 and `:AIFixDiagnostic` also collect a small amount of this semantic context
 before sending their single model request.
 
