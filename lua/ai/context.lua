@@ -1,4 +1,5 @@
 local config = require("ai.config")
+local treesitter = require("ai.treesitter")
 
 local M = {}
 local uv = vim.uv or vim.loop
@@ -21,26 +22,6 @@ end
 local function clamp(value, min_value, max_value)
   return math.max(min_value, math.min(max_value, value))
 end
-
-local code_node_types = {
-  arrow_function = true,
-  anonymous_function = true,
-  class_declaration = true,
-  class_definition = true,
-  closure_expression = true,
-  constructor_declaration = true,
-  ["function"] = true,
-  function_declaration = true,
-  function_definition = true,
-  function_expression = true,
-  function_item = true,
-  generator_function = true,
-  generator_function_declaration = true,
-  lambda = true,
-  local_function = true,
-  method_declaration = true,
-  method_definition = true,
-}
 
 local function code_symbol_kinds()
   local kind = vim.lsp and vim.lsp.protocol and vim.lsp.protocol.SymbolKind or {}
@@ -224,58 +205,33 @@ function M.current_lsp_symbol_range(bufnr)
 end
 
 function M.current_code_range(bufnr)
-  bufnr = bufnr or 0
-  if not vim.treesitter or type(vim.treesitter.get_node) ~= "function" then
-    return nil, nil
-  end
-
-  local ok, node = pcall(vim.treesitter.get_node, { bufnr = bufnr })
-  if not ok or not node then
-    return nil, nil
-  end
-
-  while node do
-    local type_ok, node_type = pcall(function()
-      return node:type()
-    end)
-    if type_ok and code_node_types[node_type] then
-      local range_ok, start_row, _, end_row = pcall(function()
-        return node:range()
-      end)
-      if range_ok and start_row and end_row then
-        local total = vim.api.nvim_buf_line_count(bufnr)
-        return clamp(start_row + 1, 1, total), clamp(end_row + 1, 1, total)
-      end
-    end
-
-    local parent_ok, parent = pcall(function()
-      return node:parent()
-    end)
-    if not parent_ok then
-      return nil, nil
-    end
-    node = parent
-  end
-
-  return nil, nil
+  return treesitter.enclosing_range(bufnr or 0)
 end
 
 function M.command_range(cmd, bufnr)
   if cmd.range and cmd.range > 0 then
     return cmd.line1, cmd.line2
   end
+  bufnr = bufnr or 0
 
-  local line1, line2 = M.current_lsp_symbol_range(bufnr or 0)
-  if line1 and line2 then
-    return line1, line2
+  -- Resolve the enclosing range via LSP and tree-sitter; order is configurable.
+  -- "treesitter_first" (default) avoids the synchronous documentSymbol call.
+  local strategy = (config.get().context or {}).range_strategy or "treesitter_first"
+  local providers
+  if strategy == "lsp_first" then
+    providers = { M.current_lsp_symbol_range, M.current_code_range }
+  else
+    providers = { M.current_code_range, M.current_lsp_symbol_range }
   end
 
-  line1, line2 = M.current_code_range(bufnr or 0)
-  if line1 and line2 then
-    return line1, line2
+  for _, provider in ipairs(providers) do
+    local line1, line2 = provider(bufnr)
+    if line1 and line2 then
+      return line1, line2
+    end
   end
 
-  return M.current_paragraph_range(bufnr or 0)
+  return M.current_paragraph_range(bufnr)
 end
 
 function M.buffer_context(bufnr, max_chars)
@@ -290,6 +246,98 @@ function M.buffer_context(bufnr, max_chars)
     filetype = vim.bo[bufnr].filetype,
     text = text,
   }
+end
+
+--- A tree-sitter symbol outline of the buffer as indented text, e.g.
+---   class Foo [3-40]
+---     function bar [5-10]
+--- Empty string when tree-sitter is unavailable. Bounded by `opts.max_chars`.
+function M.outline(bufnr, opts)
+  bufnr = bufnr or 0
+  opts = opts or {}
+  local items = treesitter.symbols(bufnr, { max_items = opts.max_items or 200 })
+  if #items == 0 then
+    return ""
+  end
+
+  -- `a` encloses `b` when its full (row, col) range contains b's. Using columns
+  -- (not just end line) keeps same-line siblings from nesting under each other.
+  local function encloses(a, b)
+    local start_ok = a.line1 < b.line1 or (a.line1 == b.line1 and a.scol <= b.scol)
+    local end_ok = a.line2 > b.line2 or (a.line2 == b.line2 and a.ecol >= b.ecol)
+    return start_ok and end_ok
+  end
+
+  local budget = opts.max_chars or 4000
+  local stack = {}
+  local lines = {}
+  for _, item in ipairs(items) do
+    while #stack > 0 and not encloses(stack[#stack], item) do
+      table.remove(stack)
+    end
+    local indent = string.rep("  ", #stack)
+    local line = ("%s%s %s [%d-%d]"):format(indent, item.kind, item.name, item.line1, item.line2)
+    if #line > budget then
+      lines[#lines + 1] = indent .. "…"
+      break
+    end
+    budget = budget - #line - 1
+    lines[#lines + 1] = line
+    stack[#stack + 1] = item
+  end
+  return table.concat(lines, "\n")
+end
+
+--- Structural context around a selection: top-level imports plus the chain of
+--- enclosing function/class signatures. Returns formatted text (possibly empty),
+--- bounded by `opts.max_import_chars`. Gives the model the selection's
+--- surroundings (where types come from, what it belongs to) without sending the
+--- whole file.
+function M.scope_context(bufnr, line, opts)
+  bufnr = bufnr or 0
+  opts = opts or {}
+  local parts = {}
+
+  local imports = treesitter.imports(bufnr, { max_items = opts.max_imports or 80 })
+  if #imports > 0 then
+    local budget = opts.max_import_chars or 1500
+    local lines = {}
+    for _, imp in ipairs(imports) do
+      if #imp.text > budget then
+        lines[#lines + 1] = "…"
+        break
+      end
+      budget = budget - #imp.text - 1
+      lines[#lines + 1] = imp.text
+    end
+    if #lines > 0 then
+      parts[#parts + 1] = "Imports:\n" .. table.concat(lines, "\n")
+    end
+  end
+
+  local scopes = treesitter.enclosing_scopes(bufnr, line, { max_depth = opts.max_depth or 8 })
+  if #scopes > 0 then
+    local max_sig = opts.max_signature_chars or 160
+    local budget = opts.max_scope_chars or 800
+    local lines = {}
+    for depth, scope in ipairs(scopes) do
+      local indent = string.rep("  ", depth - 1)
+      local sig = scope.signature
+      if #sig > max_sig then
+        sig = sig:sub(1, max_sig) .. "…"
+      end
+      local line_text = ("%s%s [%d-%d]"):format(indent, sig, scope.line1, scope.line2)
+      if #line_text > budget then
+        lines[#lines + 1] = indent .. "…"
+        break
+      end
+      budget = budget - #line_text - 1
+      lines[#lines + 1] = line_text
+    end
+    parts[#parts + 1] = "Enclosing scope:\n" .. table.concat(lines, "\n")
+  end
+
+  return table.concat(parts, "\n\n")
 end
 
 function M.rules(bufnr)
@@ -317,12 +365,21 @@ function M.rules(bufnr)
   return table.concat(chunks, "\n\n")
 end
 
-function M.selection_context(cmd)
+function M.selection_context(cmd, opts)
+  opts = opts or {}
   local bufnr = vim.api.nvim_get_current_buf()
   local cursor = vim.api.nvim_win_get_cursor(0)
   local line1, line2 = M.command_range(cmd, bufnr)
   local text, lines = M.range_text(bufnr, line1, line2)
   local last_line = lines[#lines] or ""
+  -- Capture scope context synchronously here, so it reflects the same buffer
+  -- state as `text` even if the buffer is edited while async context (LSP) runs.
+  -- Callers that don't build a selection prompt can pass `scope = false` to skip
+  -- the extra tree-sitter parse/scan.
+  local scope_context = ""
+  if opts.scope ~= false and (config.get().context or {}).scope_context ~= false then
+    scope_context = M.scope_context(bufnr, line1)
+  end
   return {
     bufnr = bufnr,
     root = M.root(bufnr),
@@ -336,6 +393,7 @@ function M.selection_context(cmd)
     end_column = #last_line + 1,
     text = text,
     lines = lines,
+    scope_context = scope_context,
   }
 end
 

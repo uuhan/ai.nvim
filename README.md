@@ -352,6 +352,20 @@ One-shot commands such as `:AIExplain`, `:AIEdit`, `:AIRefactor`,
 and `:AIFixDiagnostic` also collect a small amount of this semantic context
 before sending their single model request.
 
+When there is no visual selection, these commands resolve the enclosing code
+range (the function/class around the cursor) using tree-sitter and LSP, falling
+back to the current paragraph. The order is configurable via
+`context.range_strategy`: `"treesitter_first"` (default) resolves the range with
+tree-sitter and avoids the synchronous LSP `documentSymbol` call; set
+`"lsp_first"` to prefer LSP symbol ranges. Tree-sitter only needs a parser for
+the language (no language server required).
+
+Selection commands also attach tree-sitter scope context to the prompt: the
+file's top-level imports and the chain of enclosing function/class signatures
+around the selection. This tells the model where types come from and what the
+selection belongs to without sending the whole file. It is bounded by a char
+budget; set `context.scope_context = false` to disable it.
+
 Chat tool loop settings:
 
 ```lua

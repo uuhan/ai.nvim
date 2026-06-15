@@ -39,6 +39,15 @@ local defaults = {
     max_rg_matches = 80,
     max_file_list = 120,
   },
+  context = {
+    -- Order for resolving the code range around the cursor when there is no
+    -- visual selection. "treesitter_first" avoids the synchronous LSP
+    -- documentSymbol call (~300ms); set "lsp_first" to prefer LSP symbol ranges.
+    range_strategy = "treesitter_first",
+    -- Include tree-sitter scope context (top-level imports + enclosing
+    -- function/class signatures) in selection prompts. Set false to disable.
+    scope_context = true,
+  },
   ui = {
     reuse_output = true,
     auto_scroll = true,

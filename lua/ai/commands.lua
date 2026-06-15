@@ -207,11 +207,18 @@ local function build_selection_prompt(sel, instruction, semantic_context)
     ("File: %s"):format(sel.path ~= "" and sel.path or "[No Name]"),
     ("Filetype: %s"):format(sel.filetype ~= "" and sel.filetype or "unknown"),
     ("Lines: %d-%d"):format(sel.line1, sel.line2),
+  }
+
+  if sel.scope_context and sel.scope_context ~= "" then
+    vim.list_extend(lines, { "", sel.scope_context })
+  end
+
+  vim.list_extend(lines, {
     "",
     "```" .. (sel.filetype ~= "" and sel.filetype or "text"),
     sel.text,
     "```",
-  }
+  })
 
   if semantic_context and semantic_context ~= "" then
     vim.list_extend(lines, {
@@ -654,7 +661,7 @@ end
 function M.implement(cmd)
   local task = user_prompt(cmd, "Implement the requested change.")
   local root = context.root(0)
-  local sel = context.selection_context(cmd)
+  local sel = context.selection_context(cmd, { scope = false })
   local opts = { output = "popup" }
   local bufnr = open_patch_output("implement", "Collecting implementation context...", opts)
   local diagnostics = context.all_diagnostics_context(120)
@@ -690,18 +697,24 @@ end
 
 function M.summarize_file()
   local buf = context.buffer_context(0, config.get().project.max_context_chars)
-  local prompt = table.concat({
+  local outline = context.outline(0)
+  local lines = {
     "Summarize this file for a developer who is editing it in Neovim.",
     "Focus on structure, important symbols, responsibilities, and risky areas.",
     "",
     ("File: %s"):format(buf.path ~= "" and buf.path or "[No Name]"),
     ("Filetype: %s"):format(buf.filetype ~= "" and buf.filetype or "unknown"),
+  }
+  if outline ~= "" then
+    vim.list_extend(lines, { "", "Symbol outline (tree-sitter):", outline })
+  end
+  vim.list_extend(lines, {
     "",
     "```" .. (buf.filetype ~= "" and buf.filetype or "text"),
     buf.text,
     "```",
-  }, "\n")
-  request_output("file-summary", messages(prompt), { output = "popup" })
+  })
+  request_output("file-summary", messages(table.concat(lines, "\n")), { output = "popup" })
 end
 
 function M.fix_diagnostic()
@@ -1131,7 +1144,7 @@ local function chat_selection_block(cmd)
     return nil
   end
 
-  local sel = context.selection_context(cmd)
+  local sel = context.selection_context(cmd, { scope = false })
   return table.concat({
     ("File: %s (lines %d-%d)"):format(sel.path ~= "" and rel_path(sel.path, sel.root) or "[No Name]", sel.line1, sel.line2),
     "",
