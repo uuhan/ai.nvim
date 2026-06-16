@@ -45,17 +45,36 @@ local function get_parser(bufnr)
   return parser
 end
 
--- Ensure the buffer has an up-to-date tree before using `get_node`, which
--- otherwise relies on a previously-parsed tree (absent for a cold buffer).
-local function ensure_parsed(bufnr)
+-- Return the buffer's syntax trees and parser, PREFERRING the trees the
+-- highlighter has already built; only parse explicitly when there is no tree
+-- yet (a cold, never-displayed buffer). Forcing a full parse eagerly resolves
+-- every injection, which the highlighter normally does lazily and which can hit
+-- a recursive-injection stack overflow in some buffers / Neovim builds. By
+-- reusing the existing tree we avoid triggering that on a displayed buffer.
+local function get_trees(bufnr)
   local parser = get_parser(bufnr)
   if not parser then
-    return false
+    return nil, nil
   end
+  local trees
   pcall(function()
-    parser:parse()
+    trees = parser:trees()
   end)
-  return true
+  if not trees or not trees[1] then
+    pcall(function()
+      parser:parse()
+      trees = parser:trees()
+    end)
+  end
+  if not trees or not trees[1] then
+    return nil, nil
+  end
+  return trees, parser
+end
+
+-- Ensure a tree exists before using `get_node` (which relies on a prior parse).
+local function ensure_parsed(bufnr)
+  return get_trees(bufnr) ~= nil
 end
 
 -- Resolve a 0-based (row, col) for tree-sitter lookups. With an explicit 1-based
@@ -95,14 +114,8 @@ end
 -- Smallest function/class textobject enclosing row0 (0-based) via the
 -- nvim-treesitter "textobjects" query. Returns 0-based (start_row, end_row) or nil.
 local function query_enclosing(bufnr, row0)
-  local parser = get_parser(bufnr)
-  if not parser then
-    return nil
-  end
-  local ok_parse, trees = pcall(function()
-    return parser:parse()
-  end)
-  if not ok_parse or not trees or not trees[1] then
+  local trees, parser = get_trees(bufnr)
+  if not trees then
     return nil
   end
 
@@ -241,14 +254,8 @@ end
 
 -- Symbols via the textobjects query (@function.outer / @class.outer).
 local function query_symbols(bufnr, max_items)
-  local parser = get_parser(bufnr)
-  if not parser then
-    return nil
-  end
-  local ok_parse, trees = pcall(function()
-    return parser:parse()
-  end)
-  if not ok_parse or not trees or not trees[1] then
+  local trees, parser = get_trees(bufnr)
+  if not trees then
     return nil
   end
   local query = get_textobjects_query(parser:lang())
@@ -298,14 +305,8 @@ end
 
 -- Fallback: walk the whole tree collecting code_node_types nodes.
 local function walk_symbols(bufnr, max_items)
-  local parser = get_parser(bufnr)
-  if not parser then
-    return {}
-  end
-  local ok_parse, trees = pcall(function()
-    return parser:parse()
-  end)
-  if not ok_parse or not trees or not trees[1] then
+  local trees = get_trees(bufnr)
+  if not trees then
     return {}
   end
 
@@ -430,14 +431,8 @@ function M.imports(bufnr, opts)
   if not has_treesitter() then
     return {}
   end
-  local parser = get_parser(bufnr)
-  if not parser then
-    return {}
-  end
-  local ok_parse, trees = pcall(function()
-    return parser:parse()
-  end)
-  if not ok_parse or not trees or not trees[1] then
+  local trees = get_trees(bufnr)
+  if not trees then
     return {}
   end
   local max_items = opts.max_items or 80
