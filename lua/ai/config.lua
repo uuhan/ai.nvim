@@ -105,6 +105,9 @@ local defaults = {
   safety = {
     auto_apply_edits = false,
     auto_write_edits = false,
+    -- Write a newly created file to disk on apply (otherwise "create" only fills
+    -- a buffer and leaves no file). Independent of auto_write_edits.
+    auto_write_new_files = true,
     auto_run_commands = false,
     allow_dangerous_commands = false,
     blocked_command_patterns = {

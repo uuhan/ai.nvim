@@ -264,6 +264,11 @@ local function auto_write_edits_enabled()
   return config.get().safety and config.get().safety.auto_write_edits == true
 end
 
+local function auto_write_new_files_enabled()
+  local safety = config.get().safety or {}
+  return safety.auto_write_new_files ~= false
+end
+
 local function write_applied_buffers(bufnrs)
   if not auto_write_edits_enabled() then
     return false, {}
@@ -462,8 +467,9 @@ function M.preview_patch(opts)
   return maybe_auto_apply_preview()
 end
 
---- Preview creating a new project file. Applying loads the content into a
---- new buffer; safety.auto_write_edits controls whether it is written to disk.
+--- Preview creating a new project file. Applying loads the content into a new
+--- buffer and writes it to disk when safety.auto_write_new_files is set (the
+--- default); otherwise the file stays in the buffer until saved.
 function M.preview_create(opts)
   local content_lines = split_lines(opts.content or "")
 
@@ -630,7 +636,22 @@ function M.apply_pending(cb)
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, pending.lines)
     M.pending_create = nil
 
-    local written, write_errors = write_applied_buffers({ bufnr })
+    -- A create preview should produce a real file by default. When
+    -- auto_write_new_files is enabled, write it regardless of auto_write_edits
+    -- (which only gates in-place edits to existing files).
+    local written, write_errors
+    if auto_write_new_files_enabled() then
+      write_errors = {}
+      local ok, err = pcall(vim.api.nvim_buf_call, bufnr, function()
+        vim.cmd("silent keepalt write")
+      end)
+      written = ok
+      if not ok then
+        table.insert(write_errors, ("%s: %s"):format(pending.path, err))
+      end
+    else
+      written, write_errors = write_applied_buffers({ bufnr })
+    end
     local full_message = ("AI file created: %s (%d lines). %s"):format(
       pending.path,
       #pending.lines,

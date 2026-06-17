@@ -1932,8 +1932,27 @@ do
   local created_bufnr = vim.fn.bufnr(created_path)
   assert(created_bufnr ~= -1, "create_file apply did not create a buffer")
   assert(vim.api.nvim_buf_get_lines(created_bufnr, 0, -1, false)[2] == "line two", "create_file content mismatch")
-  assert(vim.fn.filereadable(created_path) == 0, "create_file wrote to disk without safety.auto_write_edits")
+  -- auto_write_new_files defaults to true, so a created file lands on disk
+  assert(vim.fn.filereadable(created_path) == 1, "create_file apply should write the new file to disk by default")
+  assert(table.concat(vim.fn.readfile(created_path), "\n"):match("line two"), "create_file disk content mismatch")
   assert(ui.pending_create == nil, "create_file apply left a pending action")
+  vim.fn.delete(created_path)
+
+  -- with auto_write_new_files disabled, the new file stays in-buffer (gated like edits)
+  config.setup({
+    provider = { api_key = "", stream = false },
+    safety = { auto_write_new_files = false },
+    chat = { max_tool_model_chars = 80 },
+  })
+  run_tool("nvim_create_file", { path = "created/gated.lua", content = "gated" })
+  local gated_path = ui.pending_create.path
+  ui.apply_pending()
+  assert(vim.fn.filereadable(gated_path) == 0, "create_file should stay in-buffer when auto_write_new_files is off")
+  config.setup({
+    provider = { api_key = "", stream = false },
+    chat = { max_tool_model_chars = 80 },
+  })
+  vim.fn.delete(vim.fn.fnamemodify(created_path, ":h"), "rf")
 
   local exists_err = run_tool_error("nvim_create_file", { path = "edit.lua", content = "x" })
   assert(exists_err:match("already exists"), "create_file did not refuse an existing file")

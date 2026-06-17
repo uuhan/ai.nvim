@@ -179,9 +179,12 @@ exact-string file edits (nvim_edit_file), and new-file previews
 Preview tools prepare a pending action only. Patch tools still require
 :AIApply, and command tools still require :AIRun. Applied edits modify
 buffers; set safety.auto_write_edits = true to also write the modified
-buffers to disk after a successful apply. When the preview was created by an
-AIChat tool call, the :AIApply result is fed back into the conversation and
-:AIReject is recorded as an editor event.
+buffers to disk after a successful apply. Applying a new-file preview
+(nvim_create_file) writes the file to disk by default
+(safety.auto_write_new_files = true); set it to false to keep new files
+in-buffer until saved. When the preview was created by an AIChat tool call,
+the :AIApply result is fed back into the conversation and :AIReject is
+recorded as an editor event.
 
 AIChat uses this registry automatically when chat.tools_enabled is true:
 >

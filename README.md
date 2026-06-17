@@ -215,6 +215,10 @@ codex.md
   `safety.auto_write_edits = true` to also write the modified buffers to disk
   after a successful apply, which keeps follow-up commands such as test runs in
   sync with the edits. Apply results always report the disk state.
+- Applying a new-file preview (`nvim_create_file`) writes the file to disk by
+  default (`safety.auto_write_new_files = true`); otherwise a "create" would only
+  fill a buffer and leave no file. Set it to `false` to keep new files in-buffer
+  until saved, like in-place edits.
 - When a preview was created by an AIChat tool call, `:AIApply` feeds the apply
   result back into the chat and continues the conversation, so the model can
   move on to the next step. `:AIReject` records the rejection as an editor
