@@ -250,9 +250,11 @@ codex.md
   "float"`, the default): it starts in insert mode, submits on `<CR>`, and
   closes on `<Esc>` or focus loss. Set `quick.input = "native"` to use
   `vim.ui.input` instead (so a UI plugin such as snacks.nvim or dressing.nvim
-  can render it). Progress is reported through `fidget.nvim` when available
-  (compact status, tool-call, and short reply notifications), falling back to
-  `vim.notify` otherwise; long replies open in the existing AI popup. It is
+  can render it). While the request runs, progress shows as a persistent
+  `fidget.nvim` spinner (status and tool-call updates) that stays visible until
+  the reply arrives, instead of a one-shot notification that can expire; without
+  fidget it falls back to a key-updated `vim.notify`. Long replies open in the
+  existing AI popup. It is
   bound to `<leader>aq` by default (normal mode prompts for a task; visual mode
   shares the selection as context); set `quick.keymap` to another lhs or
   `false` to change or disable it.

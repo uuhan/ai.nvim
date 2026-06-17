@@ -40,12 +40,65 @@ local function notify(message, level, opts)
   vim.notify(message, level or vim.log.levels.INFO, notify_opts)
 end
 
-local function event_notifier(task)
+-- A progress handle that shows a persistent spinner while the request runs.
+-- Uses fidget's progress API (indeterminate -> animated spinner) so the status
+-- stays visible while waiting for the model instead of expiring like a one-shot
+-- notification; falls back to a key-updated notification when fidget's progress
+-- API is unavailable.
+local function make_progress(title, message)
+  local quick = config.get().quick or {}
+  if quick.use_fidget ~= false then
+    local ok, handle_mod = pcall(require, "fidget.progress.handle")
+    if ok and type(handle_mod.create) == "function" then
+      local created, handle = pcall(handle_mod.create, {
+        title = title,
+        message = message or "thinking…",
+        lsp_client = { name = title },
+      })
+      if created and handle then
+        return {
+          report = function(text)
+            pcall(function()
+              handle:report({ message = text })
+            end)
+          end,
+          finish = function(text, level)
+            pcall(function()
+              if text and text ~= "" then
+                handle:report({ message = text })
+              end
+              handle:finish()
+            end)
+            if level == vim.log.levels.ERROR and text and text ~= "" then
+              notify(text, level, { annote = "error" })
+            end
+          end,
+        }
+      end
+    end
+  end
+
+  -- Fallback: one key-updated notification (no spinner animation).
   local uv = vim.uv or vim.loop
-  local id = ("ai.nvim.quick.%d"):format(uv.hrtime())
-  local last_status = nil
+  local key = ("ai.nvim.quick.%d"):format(uv.hrtime())
+  notify(message or "thinking…", vim.log.levels.INFO, { key = key, annote = "quick", skip_history = true })
+  return {
+    report = function(text)
+      notify(text, vim.log.levels.INFO, { key = key, annote = "quick", skip_history = true })
+    end,
+    finish = function(text, level)
+      if text and text ~= "" then
+        notify(text, level or vim.log.levels.INFO, { key = key, annote = "done" })
+      end
+    end,
+  }
+end
+
+local function event_notifier(task)
   local quick = config.get().quick or {}
   local max_notify_chars = tonumber(quick.max_notify_chars) or 600
+  local progress = make_progress(quick.title or "ai.nvim", "AI: " .. short_text(task, 60))
+  local last_status = nil
 
   return function(event)
     if type(event) ~= "table" then
@@ -59,48 +112,33 @@ local function event_notifier(task)
       end
       if text ~= last_status then
         last_status = text
-        notify(text, vim.log.levels.INFO, { key = id .. ".status", annote = "quick", skip_history = true })
+        progress.report(text)
       end
     elseif event.type == "tool_call" then
-      notify("Tool call: " .. (event.tool or "unknown"), vim.log.levels.INFO, {
-        key = id .. ".tool",
-        annote = "tool",
-        skip_history = true,
-      })
+      progress.report("Tool: " .. (event.tool or "unknown"))
     elseif event.type == "tool_result" then
-      local level = event.error and vim.log.levels.ERROR or vim.log.levels.INFO
-      notify(short_text(("Tool result: %s"):format(event.summary or event.tool or "done"), 180), level, {
-        key = id .. ".tool",
-        annote = event.error and "error" or "tool",
-        skip_history = true,
-      })
+      progress.report(short_text(("Tool result: %s"):format(event.summary or event.tool or "done"), 120))
     elseif event.type == "assistant" then
       local content = trim(event.content)
       if content == "" then
         return
       end
       if #content <= max_notify_chars then
-        notify(content, vim.log.levels.INFO, { key = id .. ".reply", annote = "reply" })
+        notify(content, vim.log.levels.INFO, { annote = "reply" })
       else
-        notify(("AI reply ready: %d chars"):format(#content), vim.log.levels.INFO, {
-          key = id .. ".reply",
-          annote = "reply",
-        })
+        notify(("AI reply ready: %d chars"):format(#content), vim.log.levels.INFO, { annote = "reply" })
         popup.open("quick-reply", content, "markdown")
       end
     elseif event.type == "finish" then
       if event.status == "error" then
-        notify("AI quick failed" .. (event.detail and event.detail ~= "" and (": " .. event.detail) or ""), vim.log.levels.ERROR, {
-          key = id .. ".status",
-          annote = "error",
-        })
+        progress.finish(
+          "failed" .. (event.detail and event.detail ~= "" and (": " .. event.detail) or ""),
+          vim.log.levels.ERROR
+        )
       elseif event.status == "stopped" then
-        notify("AI quick stopped", vim.log.levels.WARN, { key = id .. ".status", annote = "stopped" })
+        progress.finish("stopped", vim.log.levels.WARN)
       else
-        notify("AI quick done" .. (task ~= "" and (": " .. short_text(task, 80)) or ""), vim.log.levels.INFO, {
-          key = id .. ".status",
-          annote = "done",
-        })
+        progress.finish("done" .. (task ~= "" and (": " .. short_text(task, 80)) or ""))
       end
     end
   end
@@ -126,7 +164,6 @@ function M.run(text, opts)
   end
 
   chat.start({ system_prompt = opts.system_prompt })
-  notify("AI quick: " .. short_text(text, 120), vim.log.levels.INFO, { annote = "quick", skip_history = true })
   local quick = config.get().quick or {}
   local instruction = trim(quick.instruction)
   local message = text
