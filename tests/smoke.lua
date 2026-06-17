@@ -1215,6 +1215,7 @@ assert(rendered_chat:match("> %[!NOTE%] Tool call: nvim_current_buffer"), "AICha
 assert(rendered_chat:match("> %[!NOTE%] Tool call: nvim_read_buffer"), "AIChat did not render tool call markdown")
 assert(rendered_chat:match("> %[!INFO%] Tool result: nvim_read_buffer %(returned%)"), "AIChat did not render tool result markdown")
 assert(rendered_chat:match("> summary:"), "AIChat did not render tool result summary")
+assert(rendered_chat:match("> summary: `"), "AIChat tool result summary should be inline code (paths with ~ must not render as markdown)")
 assert(rendered_chat:match("> details:"), "AIChat did not render tool result details header")
 assert(rendered_chat:match("> ```json"), "AIChat did not render tool result as fenced markdown")
 local folded_line

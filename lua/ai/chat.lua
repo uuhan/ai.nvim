@@ -201,6 +201,19 @@ local function enable_markdown_renderer()
   M.render_markdown_attached = enabled
 end
 
+-- Wrap a value in inline code so its contents (paths with ~, *, _, [] etc.) are
+-- not interpreted as markdown — e.g. a home-dir `~` rendering as strikethrough.
+local function inline_code(text)
+  text = tostring(text or ""):gsub("[\r\n]+", " ")
+  local longest = 0
+  for run in text:gmatch("`+") do
+    longest = math.max(longest, #run)
+  end
+  local fence = string.rep("`", longest + 1)
+  local pad = (text:match("^`") or text:match("`$")) and " " or ""
+  return fence .. pad .. text .. pad .. fence
+end
+
 local function add_callout(lines, kind, title, rows)
   table.insert(lines, ("> [!%s] %s"):format(kind, title))
   for _, row in ipairs(rows) do
@@ -397,7 +410,7 @@ render_history = function(extra)
       local kind = message.error and "ERROR" or "INFO"
       local rows = {
         "status: " .. status,
-        "summary: " .. (message.summary or status),
+        "summary: " .. inline_code(message.summary or status),
       }
       if message.display_truncated then
         table.insert(
