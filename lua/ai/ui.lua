@@ -135,8 +135,8 @@ local function set_winbar(bufnr, value)
   end
 end
 
--- Close the window(s) showing a preview buffer. Used after a command preview is
--- accepted so the (now stale) preview does not linger.
+-- Close the window(s) showing a preview buffer. Used after a preview is
+-- accepted or rejected so the (now stale) preview does not linger.
 local function close_preview(bufnr)
   if not bufnr then
     return
@@ -150,6 +150,48 @@ local function close_preview(bufnr)
       end
     end
   end
+end
+
+-- The fixed accept/reject/close winbar hint shown on a preview window, built
+-- from the configured buffer keymaps.
+local function preview_hint()
+  local keys = config.get().ui.buffer_keymaps or {}
+  return ("%%#Title# %s accept · %s reject · %s close %%*"):format(
+    keys.apply or "a",
+    keys.reject or "r",
+    keys.close or "q"
+  )
+end
+
+-- Render a write preview (edit/patch/create). With no output_bufnr (a standalone
+-- command) it opens a floating popup with the accept/reject winbar hint and
+-- returns the bufnr to close on apply/reject. With an output_bufnr (a chat tool
+-- call) it renders into that buffer as before and returns nil — that window is
+-- managed by the caller, so we must not close it.
+local function render_write_preview(opts, title, text, filetype)
+  filetype = filetype or "markdown"
+  -- A preview is "unmanaged" only when a chat tool renders into a buffer it owns
+  -- (the conversation window): then we must not add a winbar or close it. A chat
+  -- tool that opens its own popup (no output_bufnr) is still managed/closable, so
+  -- apply/reject can close it instead of leaking a window.
+  local managed = not (opts.source == "chat" and opts.output_bufnr)
+
+  local bufnr = opts.output_bufnr
+  if bufnr then
+    if opts.output == "popup" then
+      popup.set(bufnr, title, text, filetype)
+    else
+      M.set_output(bufnr, title, text, filetype)
+    end
+  else
+    bufnr = popup.open(title, text, filetype)
+  end
+
+  if managed then
+    set_winbar(bufnr, preview_hint())
+    return bufnr
+  end
+  return nil
 end
 
 function M.open_output(title, text, filetype)
@@ -401,17 +443,7 @@ function M.preview_edit(opts)
     "```",
   }, "\n")
 
-  if opts.output_bufnr then
-    if opts.output == "popup" then
-      popup.set(opts.output_bufnr, "edit-preview", text, "markdown")
-    else
-      M.set_output(opts.output_bufnr, "edit-preview", text, "markdown")
-    end
-  elseif opts.output == "popup" then
-    popup.open("edit-preview", text, "markdown")
-  else
-    M.open_output("edit-preview", text, "markdown")
-  end
+  M.pending_edit.output_bufnr = render_write_preview(opts, "edit-preview", text)
   return maybe_auto_apply_preview()
 end
 
@@ -453,17 +485,7 @@ function M.preview_patch(opts)
     "```",
   }, "\n")
 
-  if opts.output_bufnr then
-    if opts.output == "popup" then
-      popup.set(opts.output_bufnr, opts.title or "patch-preview", text, "markdown")
-    else
-      M.set_output(opts.output_bufnr, opts.title or "patch-preview", text, "markdown")
-    end
-  elseif opts.output == "popup" then
-    popup.open(opts.title or "patch-preview", text, "markdown")
-  else
-    M.open_output(opts.title or "patch-preview", text, "markdown")
-  end
+  M.pending_patch.output_bufnr = render_write_preview(opts, opts.title or "patch-preview", text)
   return maybe_auto_apply_preview()
 end
 
@@ -493,11 +515,7 @@ function M.preview_create(opts)
     "```",
   }, "\n")
 
-  if opts.output_bufnr then
-    M.set_output(opts.output_bufnr, "create-preview", text, "markdown")
-  else
-    M.open_output("create-preview", text, "markdown")
-  end
+  M.pending_create.output_bufnr = render_write_preview(opts, "create-preview", text)
   return maybe_auto_apply_preview()
 end
 
@@ -585,6 +603,7 @@ function M.apply_pending(cb)
       end
 
       M.pending_patch = nil
+      close_preview(pending.output_bufnr)
       local written, write_errors = write_applied_buffers(bufnrs)
       local full_message = (message or "AI patch applied.") .. " " .. disk_state_note(written, write_errors)
       M.notify(full_message)
@@ -635,6 +654,7 @@ function M.apply_pending(cb)
     vim.bo[bufnr].buflisted = true
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, pending.lines)
     M.pending_create = nil
+    close_preview(pending.output_bufnr)
 
     -- A create preview should produce a real file by default. When
     -- auto_write_new_files is enabled, write it regardless of auto_write_edits
@@ -713,6 +733,7 @@ function M.apply_pending(cb)
 
   vim.api.nvim_buf_set_lines(edit.bufnr, edit.line1 - 1, edit.line2, false, edit.replacement_lines)
   M.pending_edit = nil
+  close_preview(edit.output_bufnr)
   local written, write_errors = write_applied_buffers({ edit.bufnr })
   local full_message = ("AI edit applied to %s:%d-%d. %s"):format(
     edit.path ~= "" and edit.path or "[No Name]",
@@ -769,6 +790,12 @@ function M.reject_pending()
     or (M.pending_patch and M.pending_patch.source)
     or (M.pending_create and M.pending_create.source)
     or (runner.pending and runner.pending.source)
+  close_preview(
+    (M.pending_edit and M.pending_edit.output_bufnr)
+      or (M.pending_patch and M.pending_patch.output_bufnr)
+      or (M.pending_create and M.pending_create.output_bufnr)
+      or (runner.pending and runner.pending.output_bufnr)
+  )
   M.pending_edit = nil
   M.pending_patch = nil
   M.pending_create = nil

@@ -1927,8 +1927,12 @@ do
   local create_preview = run_tool("nvim_create_file", { path = "created/new.lua", content = "line one\nline two" })
   assert(create_preview.status == "previewed" and create_preview.action == "create_file", "create_file did not preview")
   assert(ui.pending_create and ui.pending_create.path:match("created/new%.lua$"), "create_file pending action missing")
+  -- a standalone create preview renders in a floating popup we can close on apply
+  assert(popup.is_open(), "create_file preview should render in a floating popup")
+  assert(ui.pending_create.output_bufnr, "create_file preview should track its window for closing")
   local created_path = ui.pending_create.path
   ui.apply_pending()
+  assert(not popup.is_open(), "create_file apply should close the preview popup")
   local created_bufnr = vim.fn.bufnr(created_path)
   assert(created_bufnr ~= -1, "create_file apply did not create a buffer")
   assert(vim.api.nvim_buf_get_lines(created_bufnr, 0, -1, false)[2] == "line two", "create_file content mismatch")
@@ -2101,6 +2105,24 @@ do
       vim.api.nvim_buf_delete(b, { force = true })
     end
   end
+end
+
+-- A chat-tool write preview (source="chat", no output buffer) opens its own
+-- managed popup that apply/reject closes — it must not leak a window.
+do
+  config.setup({ provider = { api_key = "", stream = false }, chat = { max_tool_model_chars = 80 } })
+  vim.api.nvim_set_current_buf(tool_buf)
+  run_tool("nvim_preview_buffer_replace", {
+    bufnr = tool_buf,
+    start_line = 1,
+    end_line = 1,
+    replacement = "local x = 9",
+  }, { source = "chat" })
+  assert(ui.pending_edit and ui.pending_edit.source == "chat", "chat-tool preview should be pending with chat source")
+  assert(ui.pending_edit.output_bufnr, "chat-tool popup preview should be managed (closable)")
+  assert(popup.is_open(), "chat-tool write preview should open a popup")
+  ui.reject_pending()
+  assert(not popup.is_open(), "rejecting a chat-tool preview should close its popup")
 end
 
 print("ai.nvim smoke ok")

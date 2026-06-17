@@ -207,8 +207,10 @@ codex.md
 
 ## Notes
 
-- Edits and AI-generated patches create previews by default. Use `:AIApply`
-  after inspecting the diff, or `:AIReject` to discard it.
+- Edits, patches, and new files create previews by default. Standalone commands
+  render the preview in a floating popup with a top-of-window `a accept · r
+  reject · q close` hint; press `a` to apply (or `:AIApply`) and `r` to reject
+  (or `:AIReject`). The popup closes automatically once you accept or reject.
 - Set `safety.auto_apply_edits = true` only if you want edit and patch previews
   to apply immediately after they are generated.
 - Applied edits and patches modify buffers only. Set

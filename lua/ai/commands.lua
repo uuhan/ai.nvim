@@ -182,6 +182,7 @@ end
 
 local function request_patch(title, req_messages, bufnr, cwd, opts)
   opts = opts or {}
+  opts.output = opts.output or "popup"
   cwd = cwd or context.root(0)
   bufnr = bufnr or open_patch_output(title, "Requesting AI patch...", opts)
   set_patch_output(bufnr, title, "Requesting AI patch...", opts)
@@ -462,6 +463,7 @@ end
 
 local function edit_selection(cmd, instruction, opts)
   opts = opts or {}
+  opts.output = opts.output or "popup"
   local sel = with_target_window(function()
     return context.selection_context(cmd)
   end)
@@ -724,7 +726,7 @@ function M.fix_diagnostic()
     return
   end
 
-  local bufnr = ui.open_output("diagnostic-fix", "Collecting language context...")
+  local bufnr = open_patch_output("diagnostic-fix", "Collecting language context...", { output = "popup" })
   collect_diagnostic_language_context(diag, function(language_context)
     local lines = {
       "Fix the following diagnostic.",
