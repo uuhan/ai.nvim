@@ -538,6 +538,13 @@ function M.preview_command(opts)
   M.pending_patch = nil
   M.pending_create = nil
 
+  -- A chat tool call already shows the command in the conversation; don't open a
+  -- separate preview window that would cover the chat. The pending command stays
+  -- registered (runner.preview above), so auto-run / :AIRun still work.
+  if opts.source == "chat" then
+    return
+  end
+
   local keys = config.get().ui.buffer_keymaps or {}
   local accept_key = keys.apply or "a"
   local reject_key = keys.reject or "r"

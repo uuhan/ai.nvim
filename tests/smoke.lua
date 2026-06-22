@@ -990,6 +990,8 @@ assert(git_diff.text:match("# git status %-%-short"), "git diff tool returned wr
 local command_preview = run_tool("nvim_preview_command", { command = "printf '%s\\n' ok" }, { source = "chat" })
 assert(command_preview.status == "previewed", "command preview tool did not preview")
 assert(require("ai.runner").pending.source == "chat", "command preview tool did not record chat source")
+-- a chat command preview must not open a separate preview window over the chat
+assert(require("ai.runner").pending.output_bufnr == nil, "chat command preview should not open a separate window")
 
 config.setup({
   provider = {
