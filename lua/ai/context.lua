@@ -61,14 +61,21 @@ function M.root(bufnr)
   bufnr = bufnr or 0
   local name = vim.api.nvim_buf_get_name(bufnr)
   local start = name ~= "" and dirname(name) or uv.cwd()
-  local markers = config.get().project.markers
+  local project = config.get().project or {}
 
   if vim.fs and vim.fs.find then
-    local found = vim.fs.find(markers, { upward = true, path = start })[1]
-    if found then
-      if vim.fn.isdirectory(found) == 1 and vim.fs.basename(found) == ".git" then
-        return dirname(found)
+    -- Prefer the git repository root so a monorepo/workspace member resolves to
+    -- the top-level project, not the nearest nested manifest (Cargo.toml,
+    -- package.json, Makefile, ...). Set project.prefer_git_root = false to use
+    -- the nearest marker instead.
+    if project.prefer_git_root ~= false then
+      local git = vim.fs.find({ ".git" }, { upward = true, path = start })[1]
+      if git then
+        return dirname(git)
       end
+    end
+    local found = vim.fs.find(project.markers, { upward = true, path = start })[1]
+    if found then
       return dirname(found)
     end
   end

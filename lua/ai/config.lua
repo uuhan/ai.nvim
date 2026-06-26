@@ -35,6 +35,9 @@ local defaults = {
   },
   project = {
     markers = { ".git", "Cargo.toml", "package.json", "go.mod", "pyproject.toml", "Makefile" },
+    -- Resolve the project root to the git repository root rather than the
+    -- nearest nested manifest, so monorepo/workspace members see the whole repo.
+    prefer_git_root = true,
     max_context_chars = 30000,
     max_rg_matches = 80,
     max_file_list = 120,

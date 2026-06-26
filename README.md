@@ -258,6 +258,11 @@ codex.md
   bound to `<leader>aq` by default (normal mode prompts for a task; visual mode
   shares the selection as context); set `quick.keymap` to another lhs or
   `false` to change or disable it.
+- The project root is resolved to the git repository root by default
+  (`project.prefer_git_root = true`), so in a monorepo/workspace a member
+  subdirectory still sees the whole repo instead of stopping at its nearest
+  nested manifest (`Cargo.toml`/`package.json`/...). Set it to `false` to use the
+  nearest `project.markers` match instead.
 - `:AISearchProject` uses `rg` when available. It does not maintain a vector
   database. Search terms are extracted from the question with stopword
   filtering and identifier-aware ranking, and up to three distinctive terms are
