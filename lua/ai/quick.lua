@@ -40,58 +40,15 @@ local function notify(message, level, opts)
   vim.notify(message, level or vim.log.levels.INFO, notify_opts)
 end
 
--- A progress handle that shows a persistent spinner while the request runs.
--- Uses fidget's progress API (indeterminate -> animated spinner) so the status
--- stays visible while waiting for the model instead of expiring like a one-shot
--- notification; falls back to a key-updated notification when fidget's progress
--- API is unavailable.
+-- A progress handle (persistent spinner via fidget, notification fallback).
 local function make_progress(title, message)
   local quick = config.get().quick or {}
-  if quick.use_fidget ~= false then
-    local ok, handle_mod = pcall(require, "fidget.progress.handle")
-    if ok and type(handle_mod.create) == "function" then
-      local created, handle = pcall(handle_mod.create, {
-        title = title,
-        message = message or "thinking…",
-        lsp_client = { name = title },
-      })
-      if created and handle then
-        return {
-          report = function(text)
-            pcall(function()
-              handle:report({ message = text })
-            end)
-          end,
-          finish = function(text, level)
-            pcall(function()
-              if text and text ~= "" then
-                handle:report({ message = text })
-              end
-              handle:finish()
-            end)
-            if level == vim.log.levels.ERROR and text and text ~= "" then
-              notify(text, level, { annote = "error" })
-            end
-          end,
-        }
-      end
-    end
-  end
-
-  -- Fallback: one key-updated notification (no spinner animation).
-  local uv = vim.uv or vim.loop
-  local key = ("ai.nvim.quick.%d"):format(uv.hrtime())
-  notify(message or "thinking…", vim.log.levels.INFO, { key = key, annote = "quick", skip_history = true })
-  return {
-    report = function(text)
-      notify(text, vim.log.levels.INFO, { key = key, annote = "quick", skip_history = true })
-    end,
-    finish = function(text, level)
-      if text and text ~= "" then
-        notify(text, level or vim.log.levels.INFO, { key = key, annote = "done" })
-      end
-    end,
-  }
+  return require("ai.progress").handle({
+    title = title,
+    message = message,
+    group = quick.group,
+    use_fidget = quick.use_fidget,
+  })
 end
 
 local function event_notifier(task)

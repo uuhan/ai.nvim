@@ -1104,13 +1104,43 @@ function M.send(text, send_opts)
     return
   end
 
-  M.active_on_event = send_opts.on_event
+  -- AIChat has no external on_event; mirror AIQuick by reporting the request
+  -- status as a right-corner spinner notification when chat.notify_status is on.
+  local on_event = send_opts.on_event
+  if not on_event and config.get().chat.notify_status ~= false then
+    local progress = require("ai.progress").handle({ title = "AI Chat", message = "thinking…" })
+    on_event = function(event)
+      if type(event) ~= "table" then
+        return
+      end
+      if event.type == "status" then
+        local status_text = "AI " .. (event.status or "working")
+        if event.detail and event.detail ~= "" then
+          status_text = status_text .. ": " .. event.detail
+        end
+        progress.report(status_text)
+      elseif event.type == "finish" then
+        if event.status == "error" then
+          progress.finish(
+            "failed" .. (event.detail and event.detail ~= "" and (": " .. event.detail) or ""),
+            vim.log.levels.ERROR
+          )
+        elseif event.status == "stopped" then
+          progress.finish("stopped", vim.log.levels.WARN)
+        else
+          progress.finish("done")
+        end
+      end
+    end
+  end
+
+  M.active_on_event = on_event
 
   local function emit(event)
-    if type(send_opts.on_event) ~= "function" then
+    if type(on_event) ~= "function" then
       return
     end
-    pcall(send_opts.on_event, event)
+    pcall(on_event, event)
   end
 
   local function update_status(status, detail, extra)

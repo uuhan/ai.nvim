@@ -332,8 +332,10 @@ the selection with the conversation; without a message it is recorded as
 context for your next question. While a response streams in, the view follows
 the output only if the cursor is at the bottom of the conversation pane, so
 you can scroll up and read without being yanked back down. The conversation pane shows a small status
-line such as `thinking`, `running tool`, or `idle`. The empty input pane shows
-configurable ghost text from `chat.placeholder`.
+line such as `thinking`, `running tool`, or `idle`, and the same status is also
+shown as a right-corner spinner notification (like `:AIQuick`) so you can track
+progress while looking elsewhere; set `chat.notify_status = false` to turn that
+off. The empty input pane shows configurable ghost text from `chat.placeholder`.
 
 By default, AIChat can call the harness tools listed by `:AITools`. Providers
 that support OpenAI-compatible `tools` receive native tool definitions; models

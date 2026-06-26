@@ -74,6 +74,9 @@ local defaults = {
     },
     placeholder = "在此输入，Enter 发送",
     render_markdown = true,
+    -- Mirror the chat request status (thinking/streaming/running tool) as a
+    -- right-corner spinner notification, like :AIQuick. Set false to disable.
+    notify_status = true,
     native_tools = true,
     tools_enabled = true,
     max_tool_rounds = 20,
