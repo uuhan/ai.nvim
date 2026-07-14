@@ -1178,17 +1178,40 @@ function M.pop_chat(cmd)
   open_chat(cmd, "float")
 end
 
+local function run_quick_command(action, cmd)
+  local ok, err
+  if type(action.run) == "function" then
+    ok, err = pcall(action.run, cmd)
+  else
+    local command = type(action.command) == "string" and action.command:gsub("^%s*:", "") or ""
+    command = command:gsub("^%s+", ""):gsub("%s+$", "")
+    if command == "" then
+      return
+    end
+    if action.range == true and cmd.range and cmd.range > 0 then
+      command = ("%d,%d%s"):format(cmd.line1, cmd.line2, command)
+    end
+    ok, err = pcall(vim.cmd, command)
+  end
+
+  if not ok then
+    ui.notify("AI quick command failed: " .. tostring(err), vim.log.levels.ERROR)
+  end
+end
+
 function M.quick(cmd)
   local block = chat_selection_block(cmd)
   local initial = cmd.args or ""
   if block and initial ~= "" then
     initial = initial .. "\n\n" .. block
-  elseif block then
-    initial = "Use this selection as context:\n\n" .. block
   end
   quick.input({
     initial = initial,
+    context = block and ("Use this selection as context:\n\n" .. block) or nil,
     system_prompt = system_prompt,
+    on_action = function(action)
+      run_quick_command(action, cmd)
+    end,
   })
 end
 

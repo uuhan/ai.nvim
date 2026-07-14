@@ -247,16 +247,25 @@ codex.md
   check. Command results are reported via a notification (success or error)
   rather than a separate output window.
 - `:AIQuick` opens a small input popup anchored at the cursor (`quick.input =
-  "float"`, the default): it starts in insert mode, submits on `<CR>`, and
-  closes on `<Esc>` or focus loss. Set `quick.input = "native"` to use
-  `vim.ui.input` instead (so a UI plugin such as snacks.nvim or dressing.nvim
-  can render it). While the request runs, progress shows as a persistent
-  `fidget.nvim` spinner (status and tool-call updates) that stays visible until
+  "float"`, the default). The native completion menu initially shows common AI
+  commands; type to filter, use `<Tab>`/`<S-Tab>` or `<C-n>`/`<C-p>` to move,
+  and press `<CR>` to execute. Neovim 0.11+ uses fuzzy matching; older versions
+  use prefix matching. Text that no longer matches a command remains a normal
+  free-form quick prompt. The popup closes on `<Esc>` or focus loss. Set
+  `quick.commands = false` (or `{}`) for the old plain prompt, or replace the
+  ordered list with entries shaped like `{ command = "AIExplain", description
+  = "Explain code", range = true }`. `range = true` forwards a Visual range.
+  Set `quick.input = "native"` to use `vim.ui.input` instead (and skip the
+  built-in command menu, allowing a UI plugin such as snacks.nvim or
+  dressing.nvim to render the prompt). While the request runs, progress shows
+  as a persistent `fidget.nvim` spinner (status and tool-call updates) that
+  stays visible until
   the reply arrives, instead of a one-shot notification that can expire; without
   fidget it falls back to a key-updated `vim.notify`. Long replies open in the
   existing AI popup. It is
-  bound to `<leader>aq` by default (normal mode prompts for a task; visual mode
-  shares the selection as context); set `quick.keymap` to another lhs or
+  bound to `<leader>aq` by default (Visual mode forwards the selection to a
+  chosen range command or includes it with a free-form prompt); set
+  `quick.keymap` to another lhs or
   `false` to change or disable it.
 - The project root is resolved to the git repository root by default
   (`project.prefer_git_root = true`), so in a monorepo/workspace a member

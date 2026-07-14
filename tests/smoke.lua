@@ -138,6 +138,15 @@ local editor_state_schema_json = vim.json.encode(editor_state_tool["function"].p
 assert(editor_state_schema_json:match([["properties":{}]]), "OpenAI tool schema did not encode empty properties as object")
 assert(tools.describe():match("nvim_current_buffer"), "tool description missing current buffer")
 
+local default_quick_commands = config.get().quick.commands
+assert(type(default_quick_commands) == "table" and #default_quick_commands > 0, "AIQuick command menu defaults missing")
+config.setup({
+  provider = { api_key = "" },
+  quick = { commands = { { command = "AIExplain", description = "Only command" } } },
+})
+assert(#config.get().quick.commands == 1, "custom AIQuick command list did not replace defaults")
+config.setup({ provider = { api_key = "" } })
+
 vim.cmd("new")
 vim.api.nvim_buf_set_lines(0, 0, -1, false, {
   "fn upgrade() {",

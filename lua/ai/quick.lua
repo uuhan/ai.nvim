@@ -109,6 +109,69 @@ local function busy()
   return false
 end
 
+local function command_completion(actions)
+  if type(actions) ~= "table" then
+    return {}, {}
+  end
+
+  local items = {}
+  local by_id = {}
+  for index, value in ipairs(actions) do
+    local action = type(value) == "string" and { command = value } or value
+    if type(action) == "table" then
+      local command = type(action.command) == "string" and trim(action.command):gsub("^:", "") or ""
+      if command ~= "" or type(action.run) == "function" then
+        local id = tostring(index)
+        local label = type(action.label) == "string" and trim(action.label) or ""
+        if label == "" then
+          label = command ~= "" and (":" .. command) or ("Action " .. id)
+        end
+        local description = type(action.description) == "string" and trim(action.description) or ""
+        table.insert(items, {
+          word = command ~= "" and command or label,
+          abbr = label,
+          menu = description,
+          icase = 1,
+          user_data = id,
+        })
+        by_id[id] = action
+      end
+    end
+  end
+  return items, by_id
+end
+
+local function selected_command(by_id, line)
+  local info = vim.fn.complete_info({ "completed", "items", "selected" })
+  local item = info.completed
+  if (type(item) ~= "table" or item.user_data == nil or item.user_data == "")
+    and type(info.selected) == "number"
+    and info.selected >= 0
+    and type(info.items) == "table"
+  then
+    item = info.items[info.selected + 1]
+  end
+
+  if type(item) == "table" and item.user_data ~= nil then
+    local action = by_id[tostring(item.user_data)]
+    if action then
+      return action
+    end
+  end
+
+  -- Completion may already have been accepted with CTRL-Y, which closes the
+  -- popup before <CR>. Preserve the intuitive "accept, then run" sequence.
+  local input = trim(line):gsub("^:", ""):lower()
+  if input ~= "" then
+    for _, action in pairs(by_id) do
+      local command = type(action.command) == "string" and trim(action.command):gsub("^:", ""):lower() or ""
+      if command == input then
+        return action
+      end
+    end
+  end
+end
+
 function M.run(text, opts)
   opts = opts or {}
   text = trim(text)
@@ -145,6 +208,11 @@ local function float_input(opts, on_submit)
   local quick = config.get().quick or {}
   local prompt = trim(quick.prompt) ~= "" and trim(quick.prompt) or "AI:"
   local default = tostring(opts.default or "")
+  local actions = opts.actions
+  if actions == nil then
+    actions = quick.commands
+  end
+  local completion_items, actions_by_id = command_completion(actions)
 
   local buf = vim.api.nvim_create_buf(false, true)
   vim.bo[buf].buftype = "nofile"
@@ -174,9 +242,16 @@ local function float_input(opts, on_submit)
     return
   end
   vim.wo[win].wrap = false
+  if #completion_items > 0 then
+    local completeopt = { "menuone", "noinsert" }
+    if vim.fn.has("nvim-0.11") == 1 then
+      table.insert(completeopt, "fuzzy")
+    end
+    vim.bo[buf].completeopt = table.concat(completeopt, ",")
+  end
 
   local done = false
-  local function finish(value)
+  local function finish(value, action)
     if done then
       return
     end
@@ -187,11 +262,16 @@ local function float_input(opts, on_submit)
     if vim.api.nvim_win_is_valid(win) then
       pcall(vim.api.nvim_win_close, win, true)
     end
-    on_submit(value)
+    if action and type(opts.on_action) == "function" then
+      opts.on_action(action)
+    else
+      on_submit(value)
+    end
   end
 
   vim.keymap.set({ "i", "n" }, "<CR>", function()
-    finish(vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] or "")
+    local line = vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] or ""
+    finish(line, selected_command(actions_by_id, line))
   end, { buffer = buf, nowait = true, silent = true })
 
   vim.keymap.set({ "i", "n" }, "<Esc>", function()
@@ -206,8 +286,30 @@ local function float_input(opts, on_submit)
     end,
   })
 
+  if #completion_items > 0 then
+    vim.keymap.set("i", "<Tab>", function()
+      return vim.fn.pumvisible() == 1 and "<C-n>" or "<Tab>"
+    end, { buffer = buf, expr = true, nowait = true, silent = true })
+    vim.keymap.set("i", "<S-Tab>", function()
+      return vim.fn.pumvisible() == 1 and "<C-p>" or "<S-Tab>"
+    end, { buffer = buf, expr = true, nowait = true, silent = true })
+    vim.keymap.set("i", "<Down>", function()
+      return vim.fn.pumvisible() == 1 and "<C-n>" or "<Down>"
+    end, { buffer = buf, expr = true, nowait = true, silent = true })
+    vim.keymap.set("i", "<Up>", function()
+      return vim.fn.pumvisible() == 1 and "<C-p>" or "<Up>"
+    end, { buffer = buf, expr = true, nowait = true, silent = true })
+  end
+
   -- enter insert at end of any prefilled text
   vim.cmd(default ~= "" and "startinsert!" or "startinsert")
+  if #completion_items > 0 then
+    vim.schedule(function()
+      if vim.api.nvim_win_is_valid(win) and vim.api.nvim_get_current_win() == win and vim.fn.mode():match("^[iR]") then
+        pcall(vim.fn.complete, 1, completion_items)
+      end
+    end)
+  end
 end
 
 function M.input(opts)
@@ -228,6 +330,10 @@ function M.input(opts)
     value = trim(value)
     if value == "" then
       return
+    end
+    local context_block = trim(opts.context)
+    if context_block ~= "" then
+      value = value .. "\n\n" .. context_block
     end
     M.run(value, opts)
   end

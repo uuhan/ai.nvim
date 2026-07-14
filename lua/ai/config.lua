@@ -102,6 +102,23 @@ local defaults = {
     keymap = "<leader>aq",
     input = "float", -- "float": cursor-anchored popup; "native": vim.ui.input
     prompt = "AI: ",
+    -- Commands shown by the cursor-local completion menu. Set false or {} to
+    -- keep the float as a plain prompt. Custom lists replace this list.
+    commands = {
+      { command = "AIExplain", description = "Explain selected or current code", range = true },
+      { command = "AIFindBug", description = "Find concrete correctness bugs", range = true },
+      { command = "AIFixBug", description = "Preview a focused bug fix", range = true },
+      { command = "AIEdit", description = "Improve code while preserving behavior", range = true },
+      { command = "AIRefactor", description = "Refactor selected or current code", range = true },
+      { command = "AIComment", description = "Add useful code comments", range = true },
+      { command = "AITest", description = "Suggest focused tests", range = true },
+      { command = "AIFixDiagnostic", description = "Fix the diagnostic under the cursor" },
+      { command = "AIFixAllDiagnostics", description = "Fix diagnostics in loaded buffers" },
+      { command = "AISummarizeFile", description = "Summarize the current file" },
+      { command = "AIReviewDiff", description = "Review the current git diff" },
+      { command = "AICommit", description = "Preview an AI-generated commit" },
+      { command = "AIChatToggle", description = "Toggle the side chat" },
+    },
     title = "ai.nvim",
     group = "ai.nvim.quick",
     use_fidget = true,
@@ -131,7 +148,14 @@ local defaults = {
 M.options = vim.deepcopy(defaults)
 
 function M.setup(opts)
-  M.options = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts or {})
+  opts = opts or {}
+  M.options = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts)
+  -- vim.tbl_deep_extend merges list entries by index. A command palette is an
+  -- ordered collection, so an explicitly configured list must replace the
+  -- defaults instead of retaining their trailing entries.
+  if type(opts.quick) == "table" and opts.quick.commands ~= nil then
+    M.options.quick.commands = vim.deepcopy(opts.quick.commands)
+  end
   return M.options
 end
 
