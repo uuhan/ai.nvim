@@ -4,6 +4,32 @@ local popup = require("ai.popup")
 
 local M = {}
 
+function M._command_complete(findstart, base)
+  if findstart == 1 then
+    return 0
+  end
+
+  local items = vim.b.ai_quick_completion_items or {}
+  local query = tostring(base or "")
+  if query ~= "" then
+    if vim.fn.has("nvim-0.11") == 1 then
+      items = vim.fn.matchfuzzy(items, query, { key = "word" })
+    else
+      local prefix = query:lower()
+      items = vim.tbl_filter(function(item)
+        return item.word:lower():sub(1, #prefix) == prefix
+      end, items)
+    end
+  end
+
+  return {
+    words = items,
+    -- Keep Neovim's native completion session alive after the current input
+    -- has zero matches, so deleting or typing can make the menu reappear.
+    refresh = "always",
+  }
+end
+
 local function trim(text)
   return (text or ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
@@ -124,7 +150,7 @@ local function command_completion(actions)
         local id = tostring(index)
         local label = type(action.label) == "string" and trim(action.label) or ""
         if label == "" then
-          label = command ~= "" and (":" .. command) or ("Action " .. id)
+          label = command ~= "" and command or ("Action " .. id)
         end
         local description = type(action.description) == "string" and trim(action.description) or ""
         table.insert(items, {
@@ -218,6 +244,9 @@ local function float_input(opts, on_submit)
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].swapfile = false
+  -- Completion plugins such as blink.cmp otherwise auto-trigger after the
+  -- first typed character and replace the command menu started with complete().
+  vim.b[buf].completion = false
   if default ~= "" then
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, { default })
   end
@@ -242,15 +271,43 @@ local function float_input(opts, on_submit)
     return
   end
   vim.wo[win].wrap = false
+  local original_pummaxwidth
+  if #completion_items > 0 and vim.fn.exists("+pummaxwidth") == 1 then
+    original_pummaxwidth = vim.o.pummaxwidth
+    vim.o.pummaxwidth = width
+  end
   if #completion_items > 0 then
     local completeopt = { "menuone", "noinsert" }
     if vim.fn.has("nvim-0.11") == 1 then
       table.insert(completeopt, "fuzzy")
     end
     vim.bo[buf].completeopt = table.concat(completeopt, ",")
+    vim.bo[buf].completefunc = "v:lua.require'ai.quick'._command_complete"
+    vim.b[buf].ai_quick_completion_items = completion_items
   end
 
   local done = false
+  local completion_scheduled = false
+
+  local function trigger_completion()
+    if done or #completion_items == 0 or completion_scheduled then
+      return
+    end
+    completion_scheduled = true
+    vim.schedule(function()
+      completion_scheduled = false
+      if not done
+        and vim.api.nvim_win_is_valid(win)
+        and vim.api.nvim_get_current_win() == win
+        and vim.fn.mode():match("^[iR]")
+        and vim.fn.complete_info({ "mode" }).mode == ""
+      then
+        local keys = vim.api.nvim_replace_termcodes("<C-x><C-u>", true, false, true)
+        vim.api.nvim_feedkeys(keys, "n", false)
+      end
+    end)
+  end
+
   local function finish(value, action)
     if done then
       return
@@ -261,6 +318,9 @@ local function float_input(opts, on_submit)
     end
     if vim.api.nvim_win_is_valid(win) then
       pcall(vim.api.nvim_win_close, win, true)
+    end
+    if original_pummaxwidth ~= nil then
+      vim.o.pummaxwidth = original_pummaxwidth
     end
     if action and type(opts.on_action) == "function" then
       opts.on_action(action)
@@ -287,6 +347,12 @@ local function float_input(opts, on_submit)
   })
 
   if #completion_items > 0 then
+    -- refresh="always" updates a live session; restart it if Neovim ends the
+    -- session after the input is deleted back to its original text.
+    vim.api.nvim_create_autocmd("TextChangedI", {
+      buffer = buf,
+      callback = trigger_completion,
+    })
     vim.keymap.set("i", "<Tab>", function()
       return vim.fn.pumvisible() == 1 and "<C-n>" or "<Tab>"
     end, { buffer = buf, expr = true, nowait = true, silent = true })
@@ -303,13 +369,7 @@ local function float_input(opts, on_submit)
 
   -- enter insert at end of any prefilled text
   vim.cmd(default ~= "" and "startinsert!" or "startinsert")
-  if #completion_items > 0 then
-    vim.schedule(function()
-      if vim.api.nvim_win_is_valid(win) and vim.api.nvim_get_current_win() == win and vim.fn.mode():match("^[iR]") then
-        pcall(vim.fn.complete, 1, completion_items)
-      end
-    end)
-  end
+  trigger_completion()
 end
 
 function M.input(opts)

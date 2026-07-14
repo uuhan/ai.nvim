@@ -147,6 +147,38 @@ config.setup({
 assert(#config.get().quick.commands == 1, "custom AIQuick command list did not replace defaults")
 config.setup({ provider = { api_key = "" } })
 
+local editor_win = vim.api.nvim_get_current_win()
+local original_pummaxwidth = vim.fn.exists("+pummaxwidth") == 1 and vim.o.pummaxwidth or nil
+require("ai.quick").input({ actions = { { command = "AIExplain" } } })
+local quick_buf = vim.api.nvim_get_current_buf()
+assert(vim.bo[quick_buf].buftype == "nofile", "AIQuick input did not use a scratch buffer")
+assert(vim.b[quick_buf].completion == false, "AIQuick input did not disable external completion")
+if original_pummaxwidth ~= nil then
+  assert(vim.o.pummaxwidth == vim.api.nvim_win_get_width(0), "AIQuick completion menu width is not constrained")
+end
+assert(
+  vim.bo[quick_buf].completefunc == "v:lua.require'ai.quick'._command_complete",
+  "AIQuick persistent completion source missing"
+)
+local quick_completion_autocmds = vim.api.nvim_get_autocmds({ event = "TextChangedI", buffer = quick_buf })
+assert(#quick_completion_autocmds > 0, "AIQuick completion restart missing")
+local quick_matches = require("ai.quick")._command_complete(0, "aiex")
+assert(quick_matches.refresh == "always", "AIQuick completion is not persistent")
+assert(
+  #quick_matches.words == 1
+    and quick_matches.words[1].word == "AIExplain"
+    and quick_matches.words[1].abbr == "AIExplain",
+  "AIQuick completion filtering failed"
+)
+assert(#require("ai.quick")._command_complete(0, "zzz").words == 0, "AIQuick completion kept non-matches")
+local quick_escape = vim.fn.maparg("<Esc>", "n", false, true)
+assert(type(quick_escape.callback) == "function", "AIQuick input escape mapping missing")
+quick_escape.callback()
+assert(vim.api.nvim_get_current_win() == editor_win, "AIQuick input did not restore the editor window")
+if original_pummaxwidth ~= nil then
+  assert(vim.o.pummaxwidth == original_pummaxwidth, "AIQuick did not restore the popup menu width")
+end
+
 vim.cmd("new")
 vim.api.nvim_buf_set_lines(0, 0, -1, false, {
   "fn upgrade() {",
