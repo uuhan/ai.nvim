@@ -28,6 +28,7 @@ local commands = {
   "AI",
   "AIExplain",
   "AITranslate",
+  "AITransReplace",
   "AIFindBug",
   "AIFixBug",
   "AIImplement",
@@ -142,13 +143,16 @@ assert(tools.describe():match("nvim_current_buffer"), "tool description missing 
 local default_quick_commands = config.get().quick.commands
 assert(type(default_quick_commands) == "table" and #default_quick_commands > 0, "AIQuick command menu defaults missing")
 local has_translate_quick_command = false
+local has_trans_replace_quick_command = false
 for _, action in ipairs(default_quick_commands) do
   if action.command == "AITranslate" and action.range == true then
     has_translate_quick_command = true
-    break
+  elseif action.command == "AITransReplace" and action.range == true then
+    has_trans_replace_quick_command = true
   end
 end
 assert(has_translate_quick_command, "AIQuick command menu missing AITranslate")
+assert(has_trans_replace_quick_command, "AIQuick command menu missing AITransReplace")
 config.setup({
   provider = { api_key = "" },
   quick = { commands = { { command = "AIExplain", description = "Only command" } } },
@@ -818,6 +822,32 @@ end), "timed out waiting for AITranslate target override")
 assert(override_translate_messages[1].content:find("Translate the source text into Japanese.", 1, true), "AITranslate command argument did not override configured language")
 assert(not override_translate_messages[1].content:find("French", 1, true), "AITranslate target override retained configured language")
 response_session.close()
+if vim.api.nvim_win_is_valid(explain_source_winid) then
+  vim.api.nvim_set_current_win(explain_source_winid)
+end
+
+local trans_replace_messages
+client.chat = function(messages, _, cb)
+  trans_replace_messages = messages
+  cb(nil, "local x = 2")
+end
+vim.api.nvim_set_current_buf(tool_buf)
+request_params_by_method = {}
+vim.cmd("1,1AITransReplace")
+assert(vim.wait(5000, function()
+  return trans_replace_messages ~= nil
+end), "timed out waiting for AITransReplace")
+assert(trans_replace_messages[1].content:find("Translate the source text into French.", 1, true), "AITransReplace ignored configured target language")
+assert(trans_replace_messages[2].content:find("local x = 1", 1, true), "AITransReplace omitted selected text")
+assert(next(request_params_by_method) == nil, "AITransReplace requested unnecessary language context")
+assert(ui.pending_edit and ui.pending_edit.bufnr == tool_buf, "AITransReplace did not create an edit preview")
+assert(ui.pending_edit.line1 == 1 and ui.pending_edit.line2 == 1, "AITransReplace previewed the wrong range")
+assert(ui.pending_edit.replacement_lines[1] == "local x = 2", "AITransReplace previewed the wrong translation")
+assert(vim.api.nvim_buf_get_lines(tool_buf, 0, 1, false)[1] == "local x = 1", "AITransReplace modified the source before approval")
+assert(vim.api.nvim_win_is_valid(popup.winid), "AITransReplace did not render the edit preview popup")
+assert(vim.api.nvim_buf_get_name(popup.bufnr):match("ai://edit%-preview"), "AITransReplace popup did not show the edit preview")
+ui.reject_pending()
+popup.close()
 if vim.api.nvim_win_is_valid(explain_source_winid) then
   vim.api.nvim_set_current_win(explain_source_winid)
 end

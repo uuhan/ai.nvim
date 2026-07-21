@@ -107,6 +107,7 @@ Core editing:
 :AI {prompt}                 " ask about visual selection or current paragraph
 :AIExplain                   " explain selected/current code
 :AITranslate [language]      " translate selection/current range; language overrides config
+:AITransReplace [language]   " translate and preview replacing the selected/current range
 :AIFindBug                   " find concrete bugs in selected/current code
 :AIFixBug                    " generate a concrete bug-fix preview
 :AIImplement {request}       " implement a feature as a patch preview
@@ -135,6 +136,10 @@ range used by other selection commands when no range is given. It uses
 `translate.target_language` by default; a command argument such as
 `:AITranslate Japanese` overrides the configured language for that request.
 Translation uses the result popup without changing the source buffer.
+
+`:AITransReplace` uses the same range and target-language rules, but renders an
+edit diff instead of a read-only result. The source remains unchanged until the
+preview is accepted with `a` or `:AIApply`; reject it with `r` or `:AIReject`.
 
 Buffer and project context:
 

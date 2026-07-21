@@ -672,6 +672,36 @@ function M.translate(cmd)
   request_output("translate", translation_messages(sel, language), { output = "popup" })
 end
 
+function M.translate_replace(cmd)
+  local language = translation_target(cmd)
+  if not language then
+    ui.notify("Set translate.target_language or pass a target language to :AITransReplace.", vim.log.levels.WARN)
+    return
+  end
+
+  local sel = with_target_window(function()
+    return context.selection_context(cmd, { scope = false })
+  end)
+  local opts = { output = "popup" }
+  local bufnr = open_patch_output("translate-replace", "Requesting translation...", opts)
+  client.chat(translation_messages(sel, language), {}, function(err, text)
+    if err then
+      set_patch_output(bufnr, "translate-replace-error", err, opts)
+      return
+    end
+    ui.preview_edit({
+      bufnr = sel.bufnr,
+      path = sel.path,
+      line1 = sel.line1,
+      line2 = sel.line2,
+      original_lines = sel.lines,
+      replacement = text,
+      output_bufnr = bufnr,
+      output = opts.output,
+    })
+  end)
+end
+
 function M.find_bug(cmd)
   ask_selection(cmd, table.concat({
     "Look for concrete correctness bugs in the selected code.",
@@ -1472,6 +1502,7 @@ function M.setup()
   create_command("AI", M.ai)
   create_command("AIExplain", M.explain)
   create_command("AITranslate", M.translate)
+  create_command("AITransReplace", M.translate_replace)
   create_command("AIFindBug", M.find_bug)
   create_command("AIFixBug", M.fix_bug)
   create_command("AIImplement", M.implement)

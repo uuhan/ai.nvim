@@ -110,6 +110,7 @@ local defaults = {
     commands = {
       { command = "AIExplain", description = "Explain selected or current code", range = true },
       { command = "AITranslate", description = "Translate selected or current text", range = true },
+      { command = "AITransReplace", description = "Preview translation replacement", range = true },
       { command = "AIFindBug", description = "Find concrete correctness bugs", range = true },
       { command = "AIFixBug", description = "Preview a focused bug fix", range = true },
       { command = "AIEdit", description = "Improve code while preserving behavior", range = true },

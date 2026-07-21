@@ -64,6 +64,8 @@ Core:
   :AI {prompt}              Ask about the visual selection or current paragraph.
   :AIExplain                Explain selected/current code.
   :AITranslate [language]   Translate selected/current text in a result popup.
+  :AITransReplace [language]
+                            Translate selected/current text and preview replacing it.
   :AIEdit {instruction}     Generate replacement text and preview a diff.
   :AIRefactor               Refactor selected/current code.
   :AITest                   Suggest focused tests.
@@ -73,6 +75,9 @@ Core:
 :AITranslate uses translate.target_language by default. A command argument such
 as :AITranslate Japanese overrides it for one request. It does not modify the
 source buffer.
+
+:AITransReplace uses the same language and range rules, but creates an edit
+preview. Accept it with a or :AIApply, or reject it with r or :AIReject.
 
 Buffer and project:
   :AIBuffer {prompt}        Ask with the current buffer as context.
