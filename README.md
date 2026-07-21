@@ -83,6 +83,9 @@ return {
         interval_ms = 30,
         max_chars_per_flush = 96,
       },
+      translate = {
+        target_language = "Simplified Chinese",
+      },
       chat = {
         max_tool_rounds = tonumber(os.getenv "AI_NVIM_MAX_TOOL_ROUNDS" or "") or 20,
       },
@@ -103,6 +106,7 @@ Core editing:
 ```vim
 :AI {prompt}                 " ask about visual selection or current paragraph
 :AIExplain                   " explain selected/current code
+:AITranslate [language]      " translate selection/current range; language overrides config
 :AIFindBug                   " find concrete bugs in selected/current code
 :AIFixBug                    " generate a concrete bug-fix preview
 :AIImplement {request}       " implement a feature as a patch preview
@@ -115,7 +119,7 @@ Core editing:
 ```
 
 Read-only one-shot commands render their response in a floating Markdown result
-session. This includes `:AI`, `:AIExplain`, `:AIFindBug`, `:AITest`,
+session. This includes `:AI`, `:AIExplain`, `:AITranslate`, `:AIFindBug`, `:AITest`,
 `:AIBuffer`, `:AISummarizeFile`, `:AISearchProject`, and `:AIReviewDiff`.
 The bottom input lets you continue the same request as a lightweight follow-up
 conversation, so you can challenge a finding or ask for clarification without
@@ -125,6 +129,12 @@ to focus the follow-up input. Press `q`, `<Esc>`, or `<C-q>` to close it.
 `:AIComment` accepts an optional instruction. Without one, it uses the default
 commenting policy; with one, the text is treated as an extra requirement while
 the default "do not change behavior" constraints remain in force.
+
+`:AITranslate` translates the visual selection, or the same current code/paragraph
+range used by other selection commands when no range is given. It uses
+`translate.target_language` by default; a command argument such as
+`:AITranslate Japanese` overrides the configured language for that request.
+Translation uses the result popup without changing the source buffer.
 
 Buffer and project context:
 

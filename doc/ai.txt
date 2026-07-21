@@ -22,6 +22,9 @@ Example:
       model = "gpt-4.1-mini",
       stream = true,
     },
+    translate = {
+      target_language = "Simplified Chinese",
+    },
   })
 <
 
@@ -60,11 +63,16 @@ COMMANDS                                                          *ai-commands*
 Core:
   :AI {prompt}              Ask about the visual selection or current paragraph.
   :AIExplain                Explain selected/current code.
+  :AITranslate [language]   Translate selected/current text in a result popup.
   :AIEdit {instruction}     Generate replacement text and preview a diff.
   :AIRefactor               Refactor selected/current code.
   :AITest                   Suggest focused tests.
   :AIApply                  Apply the latest AI edit preview.
   :AIReject                 Clear the latest AI edit preview.
+
+:AITranslate uses translate.target_language by default. A command argument such
+as :AITranslate Japanese overrides it for one request. It does not modify the
+source buffer.
 
 Buffer and project:
   :AIBuffer {prompt}        Ask with the current buffer as context.

@@ -51,6 +51,9 @@ local defaults = {
     -- function/class signatures) in selection prompts. Set false to disable.
     scope_context = true,
   },
+  translate = {
+    target_language = "Simplified Chinese",
+  },
   ui = {
     reuse_output = true,
     auto_scroll = true,
@@ -106,6 +109,7 @@ local defaults = {
     -- keep the float as a plain prompt. Custom lists replace this list.
     commands = {
       { command = "AIExplain", description = "Explain selected or current code", range = true },
+      { command = "AITranslate", description = "Translate selected or current text", range = true },
       { command = "AIFindBug", description = "Find concrete correctness bugs", range = true },
       { command = "AIFixBug", description = "Preview a focused bug fix", range = true },
       { command = "AIEdit", description = "Improve code while preserving behavior", range = true },
