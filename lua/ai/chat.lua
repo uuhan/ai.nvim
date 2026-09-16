@@ -1173,6 +1173,21 @@ function M.send(text, send_opts)
       if update.sessionUpdate == "agent_message_chunk" and update.content then
         assistant = assistant .. (update.content.text or "")
         update_status("streaming", "receiving response", "## Assistant\n\n" .. assistant)
+      elseif update.sessionUpdate == "agent_thought_chunk" then
+        update_status("thinking", "agent is thinking")
+      elseif update.sessionUpdate == "tool_call" then
+        local title = update.title or update.kind or "tool"
+        update_status("running tool", title)
+        emit({ type = "tool_call", tool = title, args = update.rawInput or {} })
+      elseif update.sessionUpdate == "tool_call_update" then
+        local detail = update.status or "tool update"
+        update_status(update.status == "completed" and "thinking" or "running tool", detail)
+        emit({
+          type = "tool_result",
+          tool = update.toolCallId or "tool",
+          error = update.status == "failed",
+          summary = detail,
+        })
       end
     end
     if not M.acp_client then

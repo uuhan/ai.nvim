@@ -26,8 +26,8 @@ local defaults = {
     client_version = "0.1.0",
     cwd = nil,
     client_capabilities = {
-      fs = { readTextFile = false, writeTextFile = false },
-      terminal = false,
+      fs = { readTextFile = true, writeTextFile = true },
+      terminal = true,
     },
   },
   streaming = {

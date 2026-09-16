@@ -34,7 +34,13 @@ function M.new(opts)
       if opts.on_error then schedule(opts.on_error, "ACP returned invalid JSON: " .. line) end
       return
     end
-    if message.id ~= nil then
+    if message.method and message.id ~= nil then
+      if opts.on_request then
+        schedule(opts.on_request, message.id, message.method, message.params)
+      end
+      return
+    end
+if message.id ~= nil then
       local item = self.pending[tostring(message.id)]
       if item then
         self.pending[tostring(message.id)] = nil
@@ -107,6 +113,16 @@ function M.new(opts)
     end
     vim.fn.chansend(self.job, line .. "\n")
     return id
+  end
+
+  function self.respond(id, result, error)
+    if not self.job then return nil, "ACP agent is not running" end
+    local message = { jsonrpc = "2.0", id = id }
+    if error then message.error = error else message.result = result end
+    local ok, line = pcall(encode, message)
+    if not ok then return nil, "Failed to encode ACP response: " .. tostring(line) end
+    vim.fn.chansend(self.job, line .. "\n")
+    return true
   end
 
   function self.stop()
