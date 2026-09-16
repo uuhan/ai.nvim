@@ -26,6 +26,13 @@ local defaults = {
     client_version = "0.1.0",
     tool_policy = "ask", -- "allow" or "ask"
     cwd = nil,
+    -- Hand the agent this plugin's tool registry instead of letting it run its
+    -- own tools, so both backends expose the same tools to the model. Set false
+    -- to keep the agent's native tools (it then has no editor access).
+    tools = true,
+    -- Persona for the ACP session. A string or function; nil uses the same
+    -- system prompt the OpenAI backend sends.
+    instructions = nil,
     client_capabilities = {
       fs = { readTextFile = true, writeTextFile = true },
       terminal = true,

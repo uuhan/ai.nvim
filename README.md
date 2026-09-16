@@ -139,6 +139,18 @@ permission choices, or to `"allow"` to automatically choose an allow option.
 When ACP is selected, `:AIChat` uses the ACP session and file writes are shown
 through the existing preview/apply flow.
 
+Both backends run the same tools. The ACP session declares this plugin's tool
+registry to the agent (`yaah.dev/session-profile`) along with the same system
+prompt the OpenAI backend sends, and the agent calls back over `_yaah/tools/call`
+for each one — so the agent runs the editor's tools rather than its own, and
+switching backends changes the transport, not what the model can do. Set
+`acp.tools = false` to leave the agent with its own tools instead (it then has
+no editor access), and `acp.instructions` to override the persona.
+
+Switch at runtime with `:AIBackend openai` / `:AIBackend acp`; with no argument
+it reports the current backend. Switching releases the running agent, as does
+`:AIChatReset`, so the next prompt starts a fresh session.
+
 ## Commands
 
 Core editing:
@@ -248,6 +260,7 @@ Configuration and rules:
 :AIPing
 :AIConfig
 :AIRules
+:AIBackend [openai|acp]      " report or switch the chat backend
 ```
 
 Project rule files are automatically included when present:

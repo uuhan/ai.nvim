@@ -2249,4 +2249,105 @@ do
   assert(not popup.is_open(), "rejecting a chat-tool preview should close its popup")
 end
 
+-- The ACP backend declares this plugin's tools through the session profile and
+-- answers `_yaah/tools/call`, so switching backends changes the transport and
+-- not what the model can do. A fake agent stands in for yaah here.
+do
+  local profile = require("ai.acp.profile")
+  config.setup({ provider = { api_key = "" } })
+
+  local capabilities = profile.client_capabilities({ fs = { readTextFile = true } })
+  assert(capabilities._meta["yaah.dev/session-profile"] == true, "profile capability was not negotiated")
+  assert(capabilities.fs.readTextFile == true, "configured client capabilities were dropped")
+
+  local meta = profile.session_meta("smoke persona")
+  local declared = meta["yaah.dev/session-profile"]
+  assert(#declared.tools == #tools.list(), "session profile does not declare every tool")
+  assert(declared.instructions == "smoke persona", "session profile lost its instructions")
+  for _, tool in ipairs(declared.tools) do
+    local keys = vim.tbl_keys(tool)
+    table.sort(keys)
+    assert(
+      table.concat(keys, ",") == "description,name,parameters",
+      "host tool declarations accept only name/description/parameters: " .. table.concat(keys, ",")
+    )
+  end
+
+  -- Tools off means no catalog at all: an empty one would leave the model
+  -- without tools rather than with the agent's own.
+  config.setup({ provider = { api_key = "" }, acp = { tools = false } })
+  assert(profile.session_meta("x") == nil, "disabled client tools still sent a catalog")
+  assert(
+    profile.client_capabilities({})._meta == nil,
+    "disabled client tools still negotiated the profile extension"
+  )
+  config.setup({ provider = { api_key = "" } })
+end
+
+do
+  local client = require("ai.acp.client").new({
+    command = vim.v.progpath,
+    args = { "-l", vim.fn.getcwd() .. "/tests/fixtures/fake_acp.lua" },
+    cwd = vim.fn.getcwd(),
+    instructions = function()
+      return "smoke persona"
+    end,
+    on_update = function(params)
+      local update = params and params.update or {}
+      if update.sessionUpdate == "agent_message_chunk" then
+        _G.__ai_smoke_acp_report = update.content and update.content.text or ""
+      end
+    end,
+  })
+
+  local started, start_err = nil, nil
+  client.start(function(err)
+    start_err = err
+    started = true
+  end)
+  assert(vim.wait(10000, function() return started end), "timed out starting the fake ACP agent")
+  assert(not start_err, tostring(start_err))
+
+  local session_err, session_done = nil, false
+  client.new_session({}, function(err)
+    session_err = err
+    session_done = true
+  end)
+  assert(vim.wait(10000, function() return session_done end), "timed out creating an ACP session")
+  assert(not session_err, tostring(session_err))
+
+  local prompt_done, prompt_err, stop_reason = false, nil, nil
+  client.prompt("hello", function(err, result)
+    prompt_err = err
+    stop_reason = result and result.stopReason
+    prompt_done = true
+  end)
+  assert(vim.wait(15000, function() return prompt_done end), "timed out on the ACP prompt")
+  assert(not prompt_err, tostring(prompt_err))
+  assert(stop_reason == "end_turn", "unexpected ACP stop reason: " .. tostring(stop_reason))
+
+  local report = _G.__ai_smoke_acp_report or ""
+  assert(report:match("tools=" .. #tools.list()), "agent did not receive the tool catalog: " .. report)
+  assert(report:match("instructions=yes"), "agent did not receive the instructions: " .. report)
+  assert(report:match("isError=false"), "client tool call reported an error: " .. report)
+  assert(report:match("cwd=true"), "client tool result did not reach the agent: " .. report)
+
+  client.close()
+end
+
+-- Switching backends releases the agent and is rejected for unknown names.
+do
+  config.setup({ provider = { api_key = "" } })
+  assert(vim.fn.exists(":AIBackend") == 2, "missing command AIBackend")
+  vim.cmd("AIBackend acp")
+  assert(config.get().backend == "acp", "AIBackend did not select the acp backend")
+  -- An unknown name is reported, not applied; the notification itself surfaces
+  -- as an error in headless runs.
+  pcall(vim.cmd, "AIBackend nope")
+  assert(config.get().backend == "acp", "AIBackend accepted an unknown backend")
+  vim.cmd("AIBackend openai")
+  assert(config.get().backend == "openai", "AIBackend did not restore the openai backend")
+  assert(require("ai.chat").acp_client == nil, "switching backends left an ACP client behind")
+end
+
 print("ai.nvim smoke ok")

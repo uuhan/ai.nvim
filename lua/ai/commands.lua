@@ -1418,6 +1418,31 @@ function M.tools()
   ui.open_output("tools", tools.render(), "markdown")
 end
 
+local backend_names = { "openai", "acp" }
+
+--- Switch the chat backend at runtime. Both backends declare the same tools,
+--- so this changes the transport rather than what the model can do.
+function M.backend(cmd)
+  local requested = ((cmd and cmd.args) or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  local current = config.get().backend or "openai"
+  if requested == "" then
+    ui.notify("AI backend: " .. current)
+    return
+  end
+  if not vim.tbl_contains(backend_names, requested) then
+    ui.notify(
+      ("Unknown AI backend '%s' (expected %s)"):format(requested, table.concat(backend_names, " or ")),
+      vim.log.levels.ERROR
+    )
+    return
+  end
+  -- Release the agent even when re-selecting acp: the next prompt then opens a
+  -- session that reflects the current configuration and tool registry.
+  chat_panel.stop_acp()
+  config.get().backend = requested
+  ui.notify("AI backend: " .. requested)
+end
+
 local function parse_tool_call(raw)
   raw = (raw or ""):gsub("^%s+", ""):gsub("%s+$", "")
   if raw == "" then
@@ -1465,6 +1490,20 @@ local function complete_tool_names(arg_lead, cmdline)
 
   local out = {}
   for _, name in ipairs(tools.names()) do
+    if name:sub(1, #arg_lead) == arg_lead then
+      table.insert(out, name)
+    end
+  end
+  return out
+end
+
+local function complete_backend_names(arg_lead, cmdline)
+  if cmdline:match("^%s*AIBackend%s+%S+%s") then
+    return {}
+  end
+
+  local out = {}
+  for _, name in ipairs(backend_names) do
     if name:sub(1, #arg_lead) == arg_lead then
       table.insert(out, name)
     end
@@ -1538,6 +1577,7 @@ function M.setup()
   create_command("AITool", M.tool, { nargs = "*", range = false, complete = complete_tool_names })
   create_command("AIRules", M.show_rules, { nargs = 0, range = false })
   create_command("AIConfig", M.show_config, { nargs = 0, range = false })
+  create_command("AIBackend", M.backend, { nargs = "?", range = false, complete = complete_backend_names })
 
   local quick_keymap = (config.get().quick or {}).keymap
   if quick_keymap and quick_keymap ~= "" then

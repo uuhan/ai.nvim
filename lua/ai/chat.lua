@@ -526,6 +526,17 @@ local function harness_prompt()
   return table.concat(lines, "\n")
 end
 
+--- Persona for the ACP backend: the same system message the OpenAI backend
+--- sends, so the two backends brief the model identically.
+local function acp_instructions()
+  local system = type(M.system_prompt) == "function" and M.system_prompt() or ""
+  local harness = harness_prompt()
+  if harness == "" then
+    return system
+  end
+  return system ~= "" and (system .. "\n\n" .. harness) or harness
+end
+
 local function tool_result_message(message, body)
   local state = message.error and "failed" or "returned"
   return table.concat({
@@ -1039,10 +1050,23 @@ local function open_float(chat_opts)
   M.layout = "float"
 end
 
+--- Release the ACP agent. Its session is a live process holding a server-side
+--- conversation, so switching backends or clearing the chat has to let it go
+--- rather than leave the next prompt appending to an abandoned thread.
+function M.stop_acp()
+  local client = M.acp_client
+  M.acp_client = nil
+  M.acp_on_update = nil
+  if client then
+    pcall(client.close)
+  end
+end
+
 function M.clear()
   M.history = {}
   M.status = "idle"
   M.status_detail = ""
+  M.stop_acp()
   session.finish()
   set_messages(render_history())
 end
@@ -1191,9 +1215,12 @@ function M.send(text, send_opts)
       end
     end
     if not M.acp_client then
-      M.acp_client = acp.new({ on_update = function(params)
-        if M.acp_on_update then M.acp_on_update(params) end
-      end })
+      M.acp_client = acp.new({
+        instructions = acp_instructions,
+        on_update = function(params)
+          if M.acp_on_update then M.acp_on_update(params) end
+        end,
+      })
     end
     M.active_request = acp_chat.run(M.acp_client, text, {
       on_error = function(err)

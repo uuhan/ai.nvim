@@ -1,5 +1,7 @@
 local config = require("ai.config")
+local profile = require("ai.acp.profile")
 local rpc = require("ai.acp.rpc")
+local tools = require("ai.tools")
 local ui = require("ai.ui")
 
 local M = {}
@@ -9,6 +11,35 @@ function M.new(opts)
   local acp = vim.tbl_deep_extend("force", config.get().acp or {}, opts)
   local self = { ready = false, session_id = nil, capabilities = nil, cwd = acp.cwd or vim.fn.getcwd() }
   local function emit(name, ...) if opts[name] then opts[name](...) end end
+
+  --- Persona for the session profile. A function is resolved per session so a
+  --- caller can fold in project rules that change with the target buffer.
+  local function instructions()
+    local value = opts.instructions or acp.instructions
+    if type(value) == "function" then
+      local ok, text = pcall(value)
+      return (ok and type(text) == "string") and text or ""
+    end
+    return type(value) == "string" and value or ""
+  end
+
+  --- Run one declared tool for the agent. The tools are this client's own, so
+  --- their own preview and confirmation UI is the approval step; the agent
+  --- sends no permission request for them.
+  local function client_tool_call(params, respond)
+    local name = params and params.name
+    if type(name) ~= "string" or name == "" then
+      respond({ output = "ACP tool name is required", isError = true })
+      return
+    end
+    tools.run(name, params.arguments or {}, function(err, result)
+      if err then
+        respond({ output = tostring(err), isError = true })
+      else
+        respond({ output = result == nil and vim.empty_dict() or result, isError = false })
+      end
+    end, { source = "acp" })
+  end
 
   local function safe_path(path)
     if type(path) ~= "string" or path == "" then return nil, "ACP file path is required" end
@@ -180,6 +211,8 @@ function M.new(opts)
         else self.rpc.respond(id, nil, { code = -32001, message = err }) end
       elseif method == "session/request_permission" then
         permission(params or {}, function(outcome) self.rpc.respond(id, outcome) end)
+      elseif method == "_yaah/tools/call" then
+        client_tool_call(params or {}, function(result) self.rpc.respond(id, result) end)
       else
         self.rpc.respond(id, nil, { code = -32601, message = "Unsupported ACP client method: " .. method })
       end
@@ -204,7 +237,7 @@ function M.new(opts)
     end
     self.rpc.request("initialize", {
       protocolVersion = tonumber(acp.protocol_version) or 1,
-      clientCapabilities = acp.client_capabilities,
+      clientCapabilities = profile.client_capabilities(acp.client_capabilities),
       clientInfo = { name = "ai.nvim", version = acp.client_version or "0.1.0" },
     }, function(request_err, result)
       if request_err then
@@ -229,6 +262,9 @@ function M.new(opts)
   function self.new_session(params, callback)
     params = vim.tbl_extend("force", { cwd = acp.cwd or vim.fn.getcwd(), mcpServers = {} }, params or {})
     self.cwd = params.cwd
+    if params._meta == nil then
+      params._meta = profile.session_meta(instructions())
+    end
     return self.rpc.request("session/new", params, function(err, result)
       if not err and result then self.session_id = result.sessionId end
       if callback then callback(err, result) end
