@@ -111,6 +111,7 @@ require("ai").setup({
     command = "/Users/xu/.cargo/bin/yaah",
     args = { "acp" },
     protocol_version = 1,
+    tool_policy = "ask", -- "allow" skips permission prompts
   },
 })
 ```

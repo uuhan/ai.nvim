@@ -89,6 +89,28 @@ function M.new(opts)
     vim.defer_fn(function() wait_for_terminal(term, respond) end, 50)
   end
 
+  local function permission(params, respond)
+    if opts.on_permission then opts.on_permission(params, respond); return end
+    local options = params.options or {}
+    local function selected(option)
+      if not option then respond({ outcome = "cancelled" }); return end
+      local option_id = option.optionId or option.option_id
+      if option_id then respond({ outcome = { outcome = "selected", optionId = option_id } })
+      else respond({ outcome = "cancelled" }) end
+    end
+    if acp.tool_policy == "allow" then
+      for _, option in ipairs(options) do
+        local text = ((option.optionId or "") .. " " .. (option.name or "")):lower()
+        if text:find("allow", 1, true) or text:find("accept", 1, true) or text:find("yes", 1, true) then
+          selected(option); return
+        end
+      end
+      selected(options[1]); return
+    end
+    if type(vim.ui.select) ~= "function" then selected(nil); return end
+    vim.ui.select(options, { prompt = (params.toolCall and params.toolCall.title) or "Allow ACP tool call?", format_item = function(item) return item.name or item.optionId or vim.inspect(item) end }, selected)
+  end
+
   self.rpc = rpc.new({
     command = acp.command,
     args = acp.args,
@@ -132,11 +154,7 @@ function M.new(opts)
           self.rpc.respond(id, {})
         else self.rpc.respond(id, nil, { code = -32001, message = err }) end
       elseif method == "session/request_permission" then
-        if opts.on_permission then
-          opts.on_permission(params or {}, function(outcome) self.rpc.respond(id, outcome) end)
-        else
-          self.rpc.respond(id, { outcome = "cancelled" })
-        end
+        permission(params or {}, function(outcome) self.rpc.respond(id, outcome) end)
       else
         self.rpc.respond(id, nil, { code = -32601, message = "Unsupported ACP client method: " .. method })
       end

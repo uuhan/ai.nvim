@@ -24,6 +24,7 @@ local defaults = {
     args = { "acp" },
     protocol_version = 1,
     client_version = "0.1.0",
+    tool_policy = "ask", -- "allow" or "ask"
     cwd = nil,
     client_capabilities = {
       fs = { readTextFile = true, writeTextFile = true },
