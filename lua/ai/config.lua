@@ -2,6 +2,7 @@ local M = {}
 
 local defaults = {
   system_prompt = nil,
+  backend = "openai", -- "openai" or "acp"
   provider = {
     base_url = "https://api.openai.com/v1",
     endpoint = "/chat/completions",
@@ -17,6 +18,17 @@ local defaults = {
     thinking = false,
     reasoning_effort = nil,
     extra_headers = {},
+  },
+  acp = {
+    command = "yaah",
+    args = { "acp" },
+    protocol_version = 1,
+    client_version = "0.1.0",
+    cwd = nil,
+    client_capabilities = {
+      fs = { readTextFile = false, writeTextFile = false },
+      terminal = false,
+    },
   },
   streaming = {
     interval_ms = 30,

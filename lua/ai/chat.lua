@@ -1,4 +1,6 @@
 local client = require("ai.client")
+local acp = require("ai.acp.client")
+local acp_chat = require("ai.acp.chat")
 local config = require("ai.config")
 local context = require("ai.context")
 local session = require("ai.session")
@@ -25,6 +27,8 @@ local M = {
   last_editor_winid = nil,
   target_autocmd = false,
   suspend_target_capture = false,
+  acp_client = nil,
+  acp_on_update = nil,
 }
 M.placeholder_ns = vim.api.nvim_create_namespace "ai.nvim.chat.placeholder"
 M.render_markdown_attached = false
@@ -1089,6 +1093,7 @@ function M.stop()
     end)
   end
   M.active_request = nil
+  M.acp_on_update = nil
   M.active = false
   set_status("stopped", "request cancelled")
   if type(M.active_on_event) == "function" then
@@ -1160,6 +1165,42 @@ function M.send(text, send_opts)
   push_history({ role = "user", kind = send_opts.kind, content = text })
   reset_input()
   update_status("thinking", "waiting for model", "## Assistant\n\n...")
+
+  if config.get().backend == "acp" then
+    local assistant = ""
+    M.acp_on_update = function(params)
+      local update = params and params.update or {}
+      if update.sessionUpdate == "agent_message_chunk" and update.content then
+        assistant = assistant .. (update.content.text or "")
+        update_status("streaming", "receiving response", "## Assistant\n\n" .. assistant)
+      end
+    end
+    if not M.acp_client then
+      M.acp_client = acp.new({ on_update = function(params)
+        if M.acp_on_update then M.acp_on_update(params) end
+      end })
+    end
+    M.active_request = acp_chat.run(M.acp_client, text, {
+      on_error = function(err)
+        M.active = false
+        M.acp_on_update = nil
+        update_status("error", err)
+        emit({ type = "finish", status = "error", detail = err })
+      end,
+      on_done = function(result)
+        if assistant ~= "" then
+          push_history({ role = "assistant", content = assistant })
+          emit({ type = "assistant", content = assistant })
+        end
+        M.active_request = nil
+        M.active = false
+        M.acp_on_update = nil
+        update_status("idle")
+        emit({ type = "finish", status = "idle", detail = result and result.stopReason or "" })
+      end,
+    })
+    return
+  end
 
   if config.get().chat.tools_enabled ~= false then
     local max_rounds = tonumber(config.get().chat.max_tool_rounds) or 20

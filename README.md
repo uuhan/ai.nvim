@@ -99,6 +99,43 @@ return {
 }
 ```
 
+## ACP (Agent Client Protocol)
+
+ai.nvim includes an experimental ACP v1 client for connecting to ACP agents over
+stdio. The default configuration targets `yaah acp`:
+
+```lua
+require("ai").setup({
+  backend = "acp",
+  acp = {
+    command = "/Users/xu/.cargo/bin/yaah",
+    args = { "acp" },
+    protocol_version = 1,
+  },
+})
+```
+
+Use `require("ai").acp(opts)` for a direct ACP client. Its main methods are
+`start(callback)`, `new_session(params, callback)`, `prompt(text, callback)`,
+`cancel(callback)`, and `close(callback)`. Pass `on_update` in `opts` to receive
+ACP `session/update` notifications:
+
+```lua
+local client = require("ai").acp({
+  command = "/Users/xu/.cargo/bin/yaah",
+  args = { "acp" },
+  on_update = function(params)
+    local update = params and params.update or {}
+    if update.sessionUpdate == "agent_message_chunk" then
+      print(update.content.text or "")
+    end
+  end,
+})
+```
+
+The ACP client currently targets v1 and is a standalone API; `:AIChat` still
+uses the configured OpenAI-compatible provider.
+
 ## Commands
 
 Core editing:

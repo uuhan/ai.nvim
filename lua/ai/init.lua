@@ -16,4 +16,8 @@ function M.tools()
   return require("ai.tools")
 end
 
+function M.acp(opts)
+  return require("ai.acp.client").new(opts)
+end
+
 return M
