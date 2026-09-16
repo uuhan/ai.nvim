@@ -1,5 +1,6 @@
 local config = require("ai.config")
 local rpc = require("ai.acp.rpc")
+local ui = require("ai.ui")
 
 local M = {}
 
@@ -31,15 +32,41 @@ function M.new(opts)
     return { content = table.concat(vim.list_slice(lines, start, finish), "\\n") }
   end
 
-  local function write_text_file(params)
+  local function preview_write_text_file(params, done)
     local path, path_err = safe_path(params and params.path)
-    if not path then return nil, path_err end
-    if type(params.content) ~= "string" then return nil, "ACP file content is required" end
-    local parent = vim.fn.fnamemodify(path, ":h")
-    vim.fn.mkdir(parent, "p")
-    local ok = vim.fn.writefile(vim.split(params.content, "\n", { plain = true }), path)
-    if ok ~= 0 then return nil, "Could not write file: " .. path end
-    return {}
+    if not path then done(path_err); return end
+    if type(params.content) ~= "string" then done("ACP file content is required"); return end
+    local preview = {
+      path = path,
+      source = "acp",
+      on_apply = function(err, info)
+        if err then
+          done(err)
+          return
+        end
+        if info and not info.written then
+          local bufnr = vim.fn.bufnr(path)
+          local ok, write_err = pcall(vim.api.nvim_buf_call, bufnr, function()
+            vim.cmd("silent keepalt write")
+          end)
+          if not ok then done("ACP file write failed: " .. tostring(write_err)); return end
+        end
+        done(nil, info or {})
+      end,
+    }
+    if vim.fn.filereadable(path) == 1 then
+      local bufnr = vim.fn.bufadd(path)
+      vim.fn.bufload(bufnr)
+      preview.bufnr = bufnr
+      preview.line1 = 1
+      preview.line2 = vim.api.nvim_buf_line_count(bufnr)
+      preview.original_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+      preview.replacement = params.content
+      ui.preview_edit(preview)
+    else
+      preview.content = params.content
+      ui.preview_create(preview)
+    end
   end
 
   local terminals, terminal_counter = {}, 0
@@ -126,12 +153,10 @@ function M.new(opts)
           self.rpc.respond(id, nil, { code = -32001, message = err or result })
         end
       elseif method == "fs/write_text_file" then
-        local ok, result, err = pcall(write_text_file, params or {})
-        if ok and result then
-          self.rpc.respond(id, result)
-        else
-          self.rpc.respond(id, nil, { code = -32001, message = err or result })
-        end
+        preview_write_text_file(params or {}, function(err, result)
+          if err then self.rpc.respond(id, nil, { code = -32001, message = err })
+          else self.rpc.respond(id, result) end
+        end)
       elseif method == "terminal/create" then
         local result, err = create_terminal(params or {})
         if result then self.rpc.respond(id, result) else self.rpc.respond(id, nil, { code = -32001, message = err }) end

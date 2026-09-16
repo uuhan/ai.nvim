@@ -134,8 +134,10 @@ local client = require("ai").acp({
 })
 ```
 
-The ACP client currently targets v1 and is a standalone API; `:AIChat` still
-uses the configured OpenAI-compatible provider.
+The ACP client currently targets v1. Set `acp.tool_policy` to `"ask"` to show
+permission choices, or to `"allow"` to automatically choose an allow option.
+When ACP is selected, `:AIChat` uses the ACP session and file writes are shown
+through the existing preview/apply flow.
 
 ## Commands
 

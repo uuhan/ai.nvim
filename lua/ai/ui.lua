@@ -411,6 +411,7 @@ function M.preview_edit(opts)
     original_lines = opts.original_lines,
     replacement_lines = replacement_lines,
     source = opts.source,
+    on_apply = opts.on_apply,
   }
 
   local original = join_lines(opts.original_lines)
@@ -502,6 +503,7 @@ function M.preview_create(opts)
     path = opts.path,
     lines = content_lines,
     source = opts.source,
+    on_apply = opts.on_apply,
   }
 
   local filetype = vim.filetype.match({ filename = opts.path }) or "text"
@@ -634,6 +636,7 @@ function M.apply_pending(cb)
 
     local function create_fail(err)
       M.notify(err, vim.log.levels.ERROR)
+      if pending.on_apply then pending.on_apply(err) end
       if cb then
         cb(err)
       else
@@ -693,6 +696,7 @@ function M.apply_pending(cb)
       written = written and #write_errors == 0,
       write_errors = write_errors,
     }
+    if pending.on_apply then pending.on_apply(nil, info) end
     if cb then
       cb(nil, info)
     else
@@ -719,6 +723,7 @@ function M.apply_pending(cb)
 
   local function fail(err)
     M.notify(err, vim.log.levels.ERROR)
+    if edit.on_apply then edit.on_apply(err) end
     if cb then
       cb(err)
     else
@@ -756,6 +761,7 @@ function M.apply_pending(cb)
     written = written and #write_errors == 0,
     write_errors = write_errors,
   }
+  if edit.on_apply then edit.on_apply(nil, info) end
   if cb then
     cb(nil, info)
   else
@@ -803,10 +809,13 @@ function M.reject_pending()
       or (M.pending_create and M.pending_create.output_bufnr)
       or (runner.pending and runner.pending.output_bufnr)
   )
+  local on_apply = (M.pending_create and M.pending_create.on_apply)
+    or (M.pending_edit and M.pending_edit.on_apply)
   M.pending_edit = nil
   M.pending_patch = nil
   M.pending_create = nil
   runner.clear()
+  if on_apply then on_apply("The user rejected the pending file preview.") end
   M.notify("AI pending action cleared.")
   if action then
     note_chat_event(source, ("The user rejected the pending %s preview without applying it."):format(action.kind))
