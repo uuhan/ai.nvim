@@ -108,7 +108,7 @@ stdio. The default configuration targets `yaah acp`:
 require("ai").setup({
   backend = "acp",
   acp = {
-    command = "/Users/xu/.cargo/bin/yaah",
+    command = "yaah",
     args = { "acp" },
     protocol_version = 1,
     tool_policy = "ask", -- "allow" skips permission prompts
@@ -123,7 +123,7 @@ ACP `session/update` notifications:
 
 ```lua
 local client = require("ai").acp({
-  command = "/Users/xu/.cargo/bin/yaah",
+  command = "yaah",
   args = { "acp" },
   on_update = function(params)
     local update = params and params.update or {}
