@@ -14,6 +14,15 @@ local profile_tools = 0
 local profile_instructions = ""
 local prompt_id = nil
 
+--- A session carries the client's tool catalog whether it is new or restored.
+local function take_profile(params)
+  local profile = (params._meta or {})["yaah.dev/session-profile"]
+  if profile then
+    profile_tools = #(profile.tools or {})
+    profile_instructions = profile.instructions or ""
+  end
+end
+
 for line in io.lines() do
   local ok, message = pcall(vim.json.decode, line)
   if ok and type(message) == "table" then
@@ -26,16 +35,33 @@ for line in io.lines() do
         result = {
           protocolVersion = 1,
           agentInfo = { name = "fake-acp", version = "0" },
-          agentCapabilities = { profile = meta["yaah.dev/session-profile"] == true },
+          agentCapabilities = {
+            loadSession = true,
+            profile = meta["yaah.dev/session-profile"] == true,
+          },
         },
       })
     elseif method == "session/new" then
-      local profile = (params._meta or {})["yaah.dev/session-profile"]
-      if profile then
-        profile_tools = #(profile.tools or {})
-        profile_instructions = profile.instructions or ""
-      end
+      take_profile(params)
       send({ jsonrpc = "2.0", id = id, result = { sessionId = "fake-session" } })
+    elseif method == "session/load" then
+      -- Only the one session is ours; anything else is gone, which is what a
+      -- restart looks like to a client holding a stale id.
+      if params.sessionId == "fake-session" then
+        take_profile(params)
+        -- A real agent replays the stored conversation before it answers.
+        send({
+          jsonrpc = "2.0",
+          method = "session/update",
+          params = {
+            sessionId = "fake-session",
+            update = { sessionUpdate = "agent_message_chunk", content = { type = "text", text = "replayed" } },
+          },
+        })
+        send({ jsonrpc = "2.0", id = id, result = vim.empty_dict() })
+      else
+        send({ jsonrpc = "2.0", id = id, error = { code = -32602, message = "unknown session" } })
+      end
     elseif method == "session/prompt" then
       prompt_id = id
       send({

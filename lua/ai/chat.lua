@@ -29,6 +29,7 @@ local M = {
   suspend_target_capture = false,
   acp_client = nil,
   acp_on_update = nil,
+  acp_resume_id = nil,
 }
 M.placeholder_ns = vim.api.nvim_create_namespace "ai.nvim.chat.placeholder"
 M.render_markdown_attached = false
@@ -1066,6 +1067,7 @@ function M.clear()
   M.history = {}
   M.status = "idle"
   M.status_detail = ""
+  M.acp_resume_id = nil
   M.stop_acp()
   session.finish()
   set_messages(render_history())
@@ -1074,6 +1076,11 @@ end
 --- Restore a persisted session. `which` is a session file path, or
 --- "latest"/nil for the most recent session of the current project.
 --- Further messages append to the restored session file.
+---
+--- On the ACP backend the transcript is only this side of the conversation:
+--- the agent holds its own. The live one belongs to the history being
+--- replaced, so it is released here, and the restored session id is handed to
+--- the next prompt to continue instead.
 function M.restore(which)
   local root = context.root(M.target_bufnr or 0)
   local path = which
@@ -1090,8 +1097,10 @@ function M.restore(which)
     return false, messages
   end
 
+  M.stop_acp()
   M.history = messages or {}
-  session.resume_file(path, meta.root or root)
+  M.acp_resume_id = meta.acp_session_id
+  session.resume_file(path, meta.root or root, meta.acp_session_id)
   M.status = "idle"
   M.status_detail = ""
   if valid_buffer(M.messages_bufnr) then
@@ -1222,7 +1231,20 @@ function M.send(text, send_opts)
         end,
       })
     end
+    local resume_id = M.acp_resume_id
     M.active_request = acp_chat.run(M.acp_client, text, {
+      resume = resume_id,
+      -- Record every session the chat runs on, so this file can be restored
+      -- into the same conversation later. A requested resume the agent could
+      -- not honour is worth saying out loud: the transcript is back on screen
+      -- but the model starts from nothing.
+      on_session = function(session_id, resumed)
+        M.acp_resume_id = nil
+        session.record_acp(session_id)
+        if resume_id and not resumed then
+          ui.notify("The ACP agent could not continue the saved session; starting a new one.", vim.log.levels.WARN)
+        end
+      end,
       on_error = function(err)
         M.active = false
         M.acp_on_update = nil

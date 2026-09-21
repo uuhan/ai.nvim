@@ -1609,6 +1609,17 @@ do
   assert(#persisted == 1, "continuing a restored session created a new file")
   assert(persisted[1].count == 4, "continued session did not append messages")
 
+  -- The session file also remembers which ACP conversation it belongs to, so a
+  -- restore can ask the agent to continue that one instead of starting over.
+  assert(session.record_acp("acp-smoke-1"), "ACP session id was not recorded")
+  local acp_meta = session.load(persisted[1].path)
+  assert(acp_meta.acp_session_id == "acp-smoke-1", "session file lost its ACP session id")
+  assert(session.list()[1].count == 4, "the ACP record was counted as a message")
+  chat.clear()
+  assert(chat.acp_resume_id == nil, "clearing the chat kept an ACP session to resume")
+  assert(chat.restore(persisted[1].path), "chat session restore failed")
+  assert(chat.acp_resume_id == "acp-smoke-1", "restored session did not carry its ACP session id")
+
   chat.clear()
   for index = 1, 6 do
     table.insert(chat.history, {
@@ -2333,6 +2344,62 @@ do
   assert(report:match("cwd=true"), "client tool result did not reach the agent: " .. report)
 
   client.close()
+end
+
+-- A restored chat asks the agent for the conversation it was bound to. The
+-- replay the agent sends back is dropped, because the transcript is already on
+-- screen; an id the agent no longer knows falls back to a fresh session rather
+-- than losing the prompt.
+do
+  local acp_chat = require("ai.acp.chat")
+
+  local function resume_run(resume_id)
+    local state = { replayed = false, done = false }
+    local agent = require("ai.acp.client").new({
+      command = vim.v.progpath,
+      args = { "-l", vim.fn.getcwd() .. "/tests/fixtures/fake_acp.lua" },
+      cwd = vim.fn.getcwd(),
+      instructions = function()
+        return "smoke persona"
+      end,
+      on_update = function(params)
+        local update = params and params.update or {}
+        if update.sessionUpdate == "agent_message_chunk" and (update.content or {}).text == "replayed" then
+          state.replayed = true
+        end
+      end,
+    })
+
+    acp_chat.run(agent, "hello", {
+      resume = resume_id,
+      on_session = function(session_id, resumed)
+        state.session_id = session_id
+        state.resumed = resumed
+      end,
+      on_done = function()
+        state.done = true
+      end,
+      on_error = function(err)
+        state.err = err
+        state.done = true
+      end,
+    })
+    assert(vim.wait(15000, function() return state.done end), "timed out on the resumed ACP prompt")
+    assert(not state.err, tostring(state.err))
+    agent.close()
+    return state
+  end
+
+  local resumed = resume_run("fake-session")
+  assert(resumed.session_id == "fake-session", "resumed prompt ran on another session")
+  assert(resumed.resumed == true, "the agent's own session was not resumed")
+  assert(not resumed.replayed, "the session/load replay leaked into the chat")
+  local report = _G.__ai_smoke_acp_report or ""
+  assert(report:match("tools=" .. #tools.list()), "a resumed session lost the tool catalog: " .. report)
+
+  local restarted = resume_run("gone-session")
+  assert(restarted.resumed == false, "an unknown session id was reported as resumed")
+  assert(restarted.session_id == "fake-session", "the fallback did not open a new session")
 end
 
 -- Switching backends releases the agent and is rejected for unknown names.

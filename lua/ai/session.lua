@@ -94,11 +94,12 @@ function M.begin(root)
 end
 
 --- Continue appending to an existing session file (after a restore).
-function M.resume_file(path, root)
+function M.resume_file(path, root, acp_session_id)
   M.current = {
     root = normalize_root(root),
     path = path,
     started = true,
+    acp_session_id = acp_session_id,
   }
 end
 
@@ -106,7 +107,7 @@ function M.finish()
   M.current = nil
 end
 
-function M.append(message)
+local function write(record)
   if not enabled() or not M.current then
     return false
   end
@@ -131,11 +132,30 @@ function M.append(message)
     active.started = true
   end
 
-  local encoded = json_encode({ type = "message", data = message })
+  local encoded = json_encode(record)
   if not encoded then
     return false
   end
   return append_line(active.path, encoded)
+end
+
+function M.append(message)
+  return write({ type = "message", data = message })
+end
+
+--- Bind the session file to a conversation the ACP agent keeps on its own
+--- side. This is its own record rather than a meta field because the agent
+--- only names the session once it is created, by which time the meta line has
+--- long been written.
+function M.record_acp(session_id)
+  if type(session_id) ~= "string" or session_id == "" then
+    return false
+  end
+  if not M.current or M.current.acp_session_id == session_id then
+    return false
+  end
+  M.current.acp_session_id = session_id
+  return write({ type = "acp", session_id = session_id })
 end
 
 --- Returns (meta, messages) or (nil, err). Damaged lines are skipped so a
@@ -155,6 +175,10 @@ function M.load(path)
         meta = record
       elseif record.type == "message" and type(record.data) == "table" then
         table.insert(messages, record.data)
+      elseif record.type == "acp" and meta then
+        -- The last binding wins: a restored session that the agent could not
+        -- continue records the replacement it started instead.
+        meta.acp_session_id = record.session_id
       end
     end
   end

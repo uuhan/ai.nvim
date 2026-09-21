@@ -151,6 +151,16 @@ Switch at runtime with `:AIBackend openai` / `:AIBackend acp`; with no argument
 it reports the current backend. Switching releases the running agent, as does
 `:AIChatReset`, so the next prompt starts a fresh session.
 
+On the ACP backend the chat file records which agent session it belongs to, so
+`:AIChatResume` / `:AIChatSessions` ask the agent to continue that conversation
+(`session/load`) instead of opening a new one — the model keeps the context the
+restored transcript only shows. This needs an agent that advertises
+`loadSession` and actually stores its sessions: `yaah acp` keeps them in memory
+unless it is started with storage, so pass it through `acp.args`, for example
+`args = { "acp", "--storage", "sqlite", "--storage-path", "/path/to/acp.db" }`.
+When the agent no longer has the session, the prompt opens a new one and says
+so rather than failing.
+
 ## Commands
 
 Core editing:

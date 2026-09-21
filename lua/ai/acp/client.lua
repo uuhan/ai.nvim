@@ -218,7 +218,11 @@ function M.new(opts)
       end
     end,
     on_notification = function(method, params)
-      if method == "session/update" then emit("on_update", params)
+      if method == "session/update" then
+        -- `session/load` replays the stored conversation as updates before it
+        -- answers. The caller restored that transcript from its own file, so
+        -- replaying it again would double every message.
+        if not self.replaying then emit("on_update", params) end
       else emit("on_notification", method, params) end
     end,
     on_exit = function(code, signal)
@@ -267,6 +271,31 @@ function M.new(opts)
     end
     return self.rpc.request("session/new", params, function(err, result)
       if not err and result then self.session_id = result.sessionId end
+      if callback then callback(err, result) end
+    end)
+  end
+
+  --- Continue a conversation the agent still holds. Only agents advertising
+  --- `loadSession` can do this, and only for sessions they persisted: an agent
+  --- storing its sessions in memory rejects every id once it restarts.
+  function self.load_session(session_id, callback)
+    if type(session_id) ~= "string" or session_id == "" then
+      local err = "ACP session id is required"
+      if callback then callback(err) end
+      return nil
+    end
+    local params = {
+      sessionId = session_id,
+      cwd = acp.cwd or vim.fn.getcwd(),
+      mcpServers = {},
+      _meta = profile.session_meta(instructions()),
+    }
+    self.cwd = params.cwd
+    self.replaying = true
+    return self.rpc.request("session/load", params, function(err, result)
+      self.replaying = false
+      -- `session/load` answers with the session state, not its id.
+      if not err then self.session_id = session_id end
       if callback then callback(err, result) end
     end)
   end
