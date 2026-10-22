@@ -3,7 +3,10 @@
 --
 -- Run as `nvim -l tests/fixtures/fake_acp.lua`. It reports what it received
 -- through one agent_message_chunk so the client side can assert on it.
+-- `_yaah/complete` answers with a report too; pass `--no-complete` to run an
+-- agent without that extension.
 local TOOL_REQUEST_ID = 9001
+local completes = not vim.tbl_contains(_G.arg or {}, "--no-complete")
 
 local function send(message)
   io.stdout:write(vim.json.encode(message) .. "\n")
@@ -13,6 +16,8 @@ end
 local profile_tools = 0
 local profile_instructions = ""
 local prompt_id = nil
+local held_completion = nil
+local cancelled_completions = 0
 
 --- A session carries the client's tool catalog whether it is new or restored.
 local function take_profile(params)
@@ -38,6 +43,7 @@ for line in io.lines() do
           agentCapabilities = {
             loadSession = true,
             profile = meta["yaah.dev/session-profile"] == true,
+            _meta = completes and { ["yaah.dev/complete"] = { version = 1 } } or nil,
           },
         },
       })
@@ -79,6 +85,43 @@ for line in io.lines() do
       if prompt_id then
         send({ jsonrpc = "2.0", id = prompt_id, result = { stopReason = "cancelled" } })
         prompt_id = nil
+      end
+    elseif method == "_yaah/complete" and completes then
+      local roles, last = {}, ""
+      for _, turn in ipairs(params.messages or {}) do
+        table.insert(roles, turn.role)
+        last = turn.content
+      end
+      if last == "wait for cancel" then
+        held_completion = { id = id, requestId = params.requestId }
+      else
+        local report = table.concat({
+          "roles=" .. table.concat(roles, ","),
+          "model=" .. tostring(params.model),
+          "thinking=" .. tostring(params.thinking),
+          "cancelled=" .. cancelled_completions,
+        }, " ")
+        -- `no stream` stands for an agent configured not to stream.
+        if last ~= "no stream" then
+          local half = math.floor(#report / 2)
+          for _, chunk in ipairs({ report:sub(1, half), report:sub(half + 1) }) do
+            send({
+              jsonrpc = "2.0",
+              method = "_yaah/complete/update",
+              params = {
+                requestId = params.requestId,
+                update = { sessionUpdate = "agent_message_chunk", content = { type = "text", text = chunk } },
+              },
+            })
+          end
+        end
+        send({ jsonrpc = "2.0", id = id, result = { text = report, stopReason = "end_turn", usage = vim.NIL } })
+      end
+    elseif method == "_yaah/complete/cancel" and id == nil then
+      if held_completion and held_completion.requestId == params.requestId then
+        cancelled_completions = cancelled_completions + 1
+        send({ jsonrpc = "2.0", id = held_completion.id, result = { text = "", stopReason = "cancelled" } })
+        held_completion = nil
       end
     elseif method == "session/close" then
       send({ jsonrpc = "2.0", id = id, result = vim.empty_dict() })

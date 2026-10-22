@@ -1,3 +1,4 @@
+local acp_complete = require("ai.acp.complete")
 local config = require("ai.config")
 
 local M = {}
@@ -198,7 +199,7 @@ local function make_request(messages, opts, stream)
   }, transport, nil
 end
 
-function M.chat(messages, opts, cb)
+local function http_chat(messages, opts, cb)
   local _, _, req, transport, err = make_request(messages, opts, false)
   if err then
     vim.schedule(function()
@@ -273,8 +274,7 @@ local function parse_stream_line(line, callbacks)
   end
 end
 
-function M.chat_stream(messages, opts, callbacks)
-  callbacks = callbacks or {}
+local function http_stream(messages, opts, callbacks)
   local _, _, req, transport, err = make_request(messages, opts, true)
   if err then
     vim.schedule(function()
@@ -316,6 +316,68 @@ function M.chat_stream(messages, opts, callbacks)
       if buffer ~= "" then
         parse_stream_line(buffer:gsub("\r$", ""), callbacks)
         buffer = ""
+      end
+      if callbacks.on_done then
+        callbacks.on_done()
+      end
+    end,
+  })
+end
+
+--- On the ACP backend the agent answers through `_yaah/complete`, so commands
+--- use the models and credentials configured in the agent. The HTTP provider
+--- still serves what the extension cannot (see `ai.acp.complete`).
+function M.chat(messages, opts, cb)
+  if not acp_complete.handles(messages, opts) then
+    return http_chat(messages, opts, cb)
+  end
+  return acp_complete.request(messages, {
+    fallback = function()
+      return http_chat(messages, opts, cb)
+    end,
+    on_text = function() end,
+    on_result = function(err, result)
+      if err then
+        cb(err)
+      elseif result.text == "" then
+        cb("ACP completion returned no text; stopReason=" .. tostring(result.stopReason))
+      else
+        cb(nil, result.text, result, { role = "assistant", content = result.text })
+      end
+    end,
+  })
+end
+
+function M.chat_stream(messages, opts, callbacks)
+  callbacks = callbacks or {}
+  if not acp_complete.handles(messages, opts) then
+    return http_stream(messages, opts, callbacks)
+  end
+  local streamed = ""
+  return acp_complete.request(messages, {
+    fallback = function()
+      return http_stream(messages, opts, callbacks)
+    end,
+    on_text = function(text)
+      streamed = streamed .. text
+      if callbacks.on_delta then
+        callbacks.on_delta(text)
+      end
+    end,
+    on_reasoning = callbacks.on_reasoning_delta,
+    on_result = function(err, result)
+      if err then
+        if callbacks.on_error then
+          callbacks.on_error(err)
+        end
+        return
+      end
+      -- An agent configured not to stream delivers its answer only here.
+      if #result.text > #streamed and result.text:sub(1, #streamed) == streamed and callbacks.on_delta then
+        callbacks.on_delta(result.text:sub(#streamed + 1))
+      end
+      if callbacks.on_finish then
+        callbacks.on_finish(result.finish_reason)
       end
       if callbacks.on_done then
         callbacks.on_done()

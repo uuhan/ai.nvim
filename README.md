@@ -147,6 +147,17 @@ switching backends changes the transport, not what the model can do. Set
 `acp.tools = false` to leave the agent with its own tools instead (it then has
 no editor access), and `acp.instructions` to override the persona.
 
+The other commands (`:AIExplain`, `:AITranslate`, `:AIFixBug`, …) and the
+follow-ups in their popups go to the agent too when it advertises
+`yaah.dev/complete`: each request carries the whole conversation to
+`_yaah/complete`, which answers without opening a session, so commands use the
+models and credentials configured in yaah. They run in an agent process of
+their own, started on first use, so resetting the chat never interrupts them.
+`acp.model` and `acp.thinking` pick the agent's model and thinking level for
+these requests (for example `"deepseek:deepseek-chat"` and `"off"`); unset, the
+agent's configuration applies. An agent without the extension leaves them on
+the `provider` HTTP endpoint.
+
 Switch at runtime with `:AIBackend openai` / `:AIBackend acp`; with no argument
 it reports the current backend. Switching releases the running agent, as does
 `:AIChatReset`, so the next prompt starts a fresh session.

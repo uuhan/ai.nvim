@@ -1436,9 +1436,10 @@ function M.backend(cmd)
     )
     return
   end
-  -- Release the agent even when re-selecting acp: the next prompt then opens a
+  -- Release the agents even when re-selecting acp: the next prompt then opens a
   -- session that reflects the current configuration and tool registry.
   chat_panel.stop_acp()
+  require("ai.acp.complete").stop()
   config.get().backend = requested
   ui.notify("AI backend: " .. requested)
 end

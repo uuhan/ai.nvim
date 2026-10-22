@@ -2462,6 +2462,97 @@ do
   assert(restarted.session_id == "fake-session", "the fallback did not open a new session")
 end
 
+-- On the ACP backend one-shot requests go to the agent's `_yaah/complete`: the
+-- caller's whole conversation, no session, streamed chunks. Requests the
+-- extension cannot carry, and agents without it, stay on the HTTP provider.
+do
+  local client = require("ai.client")
+  local acp_complete = require("ai.acp.complete")
+  local fake = { "-l", vim.fn.getcwd() .. "/tests/fixtures/fake_acp.lua" }
+  local http_calls = 0
+  local function setup(args, acp_opts)
+    acp_complete.stop()
+    config.setup({
+      backend = "acp",
+      provider = {
+        api_key = "",
+        transport = {
+          request = function(_, cb)
+            http_calls = http_calls + 1
+            cb(nil, [[{"choices":[{"message":{"content":"http answer"}}]}]])
+          end,
+          stream = function(_, callbacks)
+            http_calls = http_calls + 1
+            callbacks.on_chunk([[data: {"choices":[{"delta":{"content":"http stream"}}]}]] .. "\n")
+            callbacks.on_done()
+            return { kill = function() end }
+          end,
+        },
+      },
+      acp = vim.tbl_extend("force", { command = vim.v.progpath, args = args, cwd = vim.fn.getcwd() }, acp_opts or {}),
+    })
+  end
+  local function chat(messages, opts)
+    local state = {}
+    state.handle = client.chat(messages, opts or {}, function(err, text)
+      state.err, state.text, state.done = err, text, true
+    end)
+    return state
+  end
+  local function settled(state, what)
+    assert(vim.wait(10000, function() return state.done end), "timed out waiting for " .. what)
+    assert(not state.err, what .. ": " .. tostring(state.err))
+    return state.text
+  end
+  local function stream(messages)
+    local state = { deltas = {} }
+    client.chat_stream(messages, {}, {
+      on_delta = function(text) table.insert(state.deltas, text) end,
+      on_finish = function(reason) state.finish = reason end,
+      on_error = function(err) state.err, state.done = err, true end,
+      on_done = function() state.done = true end,
+    })
+    settled(state, "the ACP stream")
+    return state
+  end
+  local conversation = { { role = "system", content = "Be brief." }, { role = "user", content = "Explain." } }
+
+  setup(fake)
+  local answer = settled(chat(conversation), "the ACP completion")
+  assert(answer:match("roles=system,user "), "the agent did not get the conversation: " .. answer)
+  assert(answer:match("model=nil thinking=nil"), "unset options reached the agent: " .. answer)
+
+  local streamed = stream(conversation)
+  assert(#streamed.deltas == 2, "streamed chunks did not reach the caller: " .. vim.inspect(streamed.deltas))
+  assert(table.concat(streamed.deltas):match("^roles=system,user "), "streamed text was wrong")
+  assert(streamed.finish == "stop", "end_turn was not reported as stop: " .. tostring(streamed.finish))
+  -- An agent that does not stream still hands the whole answer to on_delta.
+  local whole = stream({ { role = "user", content = "no stream" } })
+  assert(#whole.deltas == 1 and whole.deltas[1]:match("^roles=user "), "an unstreamed answer was lost")
+
+  -- A killed request reports nothing, and the agent is told to stop it.
+  local killed = chat({ { role = "user", content = "wait for cancel" } })
+  killed.handle:kill(15)
+  vim.wait(300, function() return killed.done end)
+  assert(not killed.done, "a killed ACP completion still called back")
+  assert(settled(chat(conversation), "the completion after a kill"):match("cancelled=1"), "the agent never saw the cancel")
+
+  local tool_call = chat(conversation, { tools = { { type = "function", ["function"] = { name = "noop" } } } })
+  assert(settled(tool_call, "a tool request") == "http answer", "a request with tools left the HTTP provider")
+  assert(http_calls == 1, "unexpected HTTP calls: " .. http_calls)
+
+  setup(fake, { model = "fixture:two", thinking = "off" })
+  local configured = settled(chat(conversation), "the configured completion")
+  assert(configured:match("model=fixture:two thinking=off"), "acp.model/thinking were not sent: " .. configured)
+
+  setup(vim.list_extend(vim.deepcopy(fake), { "--no-complete" }))
+  assert(settled(chat(conversation), "the fallback completion") == "http answer", "no HTTP fallback")
+  local fallback = stream(conversation)
+  assert(table.concat(fallback.deltas) == "http stream", "no HTTP stream fallback")
+  assert(http_calls == 3, "unexpected HTTP calls after fallback: " .. http_calls)
+  acp_complete.stop()
+end
+
 -- Switching backends releases the agent and is rejected for unknown names.
 do
   config.setup({ provider = { api_key = "" } })

@@ -73,9 +73,12 @@ if message.id ~= nil then
 
   function self.start()
     if self.job then return true end
+    -- A restarted agent must not inherit a line its predecessor left unfinished.
+    self.buffer = ""
     local argv = { opts.command or "yaah" }
     vim.list_extend(argv, opts.args or {})
-    local job = vim.fn.jobstart(argv, {
+    -- jobstart raises, rather than returning 0, for a command that is not executable.
+    local started, job = pcall(vim.fn.jobstart, argv, {
       cwd = opts.cwd,
       stdin = "pipe",
       stdout_buffered = false,
@@ -86,13 +89,16 @@ if message.id ~= nil then
           schedule(opts.on_stderr, table.concat(data, "\n"))
         end
       end,
-      on_exit = function(_, code, signal)
+      on_exit = function(job_id, code, signal)
+        -- A stopped agent is already accounted for, and a restart may have
+        -- replaced it by now.
+        if self.job ~= job_id then return end
         self.job = nil
         fail_pending(("ACP agent exited (%s, signal %s)"):format(code, signal))
         if opts.on_exit then schedule(opts.on_exit, code, signal) end
       end,
     })
-    if job <= 0 then return nil, "Failed to start ACP agent: " .. table.concat(argv, " ") end
+    if not started or job <= 0 then return nil, "Failed to start ACP agent: " .. table.concat(argv, " ") end
     self.job = job
     return true
   end
@@ -113,6 +119,14 @@ if message.id ~= nil then
     end
     vim.fn.chansend(self.job, line .. "\n")
     return id
+  end
+
+  function self.notify(method, params)
+    if not self.job then return nil, "ACP agent is not running" end
+    local ok, line = pcall(encode, { jsonrpc = "2.0", method = method, params = params or {} })
+    if not ok then return nil, "Failed to encode ACP notification: " .. tostring(line) end
+    vim.fn.chansend(self.job, line .. "\n")
+    return true
   end
 
   function self.respond(id, result, error)

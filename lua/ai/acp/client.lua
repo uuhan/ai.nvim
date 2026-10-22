@@ -311,9 +311,13 @@ function M.new(opts)
     return self.rpc.request("session/prompt", { sessionId = self.session_id, prompt = prompt }, callback)
   end
 
+  --- `session/cancel` is a notification: the agent answers the cancelled
+  --- prompt itself, with `stopReason = "cancelled"`.
   function self.cancel(callback)
     if not self.session_id then return nil, "ACP session has not been created" end
-    return self.rpc.request("session/cancel", { sessionId = self.session_id }, callback)
+    local ok, err = self.rpc.notify("session/cancel", { sessionId = self.session_id })
+    if callback then vim.schedule(function() callback(err) end) end
+    return ok, err
   end
 
   function self.close(callback)

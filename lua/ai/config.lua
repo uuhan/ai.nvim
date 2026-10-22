@@ -33,6 +33,11 @@ local defaults = {
     -- Persona for the ACP session. A string or function; nil uses the same
     -- system prompt the OpenAI backend sends.
     instructions = nil,
+    -- Model and thinking level for one-shot commands answered by the agent
+    -- (`_yaah/complete`): a model id and a level the agent offers, e.g.
+    -- "deepseek:deepseek-chat" and "off". nil keeps the agent's configuration.
+    model = nil,
+    thinking = nil,
     client_capabilities = {
       fs = { readTextFile = true, writeTextFile = true },
       terminal = true,
