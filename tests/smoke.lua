@@ -377,6 +377,66 @@ end), "timed out waiting for stream buffer")
 assert(buffered_text == "我先看。", "stream buffer did not preserve UTF-8 text")
 assert(#buffered_updates >= 2, "stream buffer did not throttle updates")
 
+-- A slow redraw backs the renderer off: fewer, larger flushes, same text.
+do
+  local slow_updates = 0
+  local slow_text
+  local slow = stream_buffer.new({
+    interval_ms = 1,
+    max_chars_per_flush = 2,
+    on_update = function()
+      slow_updates = slow_updates + 1
+      vim.uv.sleep(20)
+    end,
+    on_done = function(text)
+      slow_text = text
+    end,
+  })
+  local source = string.rep("x", 200)
+  slow.push(source)
+  slow.finish()
+  assert(vim.wait(10000, function()
+    return slow_text ~= nil
+  end), "timed out waiting for the backed-off stream buffer")
+  assert(slow_text == source, "backed-off stream buffer lost text")
+  assert(slow_updates < 50, "stream buffer did not back off a slow redraw: " .. slow_updates .. " updates")
+end
+
+-- Streamed output rewrites only the changed tail and keeps its filetype, so
+-- tree-sitter is neither re-parsed from scratch nor restarted on every chunk.
+do
+  local buffer = require("ai.buffer")
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  buffer.set_lines(bufnr, { "# title", "", "first" })
+  local first_changed
+  vim.api.nvim_buf_attach(bufnr, false, {
+    on_lines = function(_, _, _, firstline)
+      first_changed = math.min(first_changed or firstline, firstline)
+    end,
+  })
+  buffer.set_lines(bufnr, { "# title", "", "first line", "second" })
+  assert(first_changed == 2, "set_lines rewrote lines before the changed tail")
+  assert(
+    table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n") == "# title\n\nfirst line\nsecond",
+    "set_lines did not apply the new tail"
+  )
+  buffer.set_lines(bufnr, { "replaced" })
+  assert(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)[1] == "replaced", "set_lines did not shrink the buffer")
+  assert(vim.api.nvim_buf_line_count(bufnr) == 1, "set_lines left stale lines behind")
+
+  local filetype_events = 0
+  vim.api.nvim_create_autocmd("FileType", {
+    buffer = bufnr,
+    callback = function()
+      filetype_events = filetype_events + 1
+    end,
+  })
+  buffer.set_filetype(bufnr, "text")
+  buffer.set_filetype(bufnr, "text")
+  assert(filetype_events == 1, "set_filetype fired FileType for an unchanged filetype")
+  vim.api.nvim_buf_delete(bufnr, { force = true })
+end
+
 local custom_request_seen = false
 local custom_stream_seen = false
 config.setup({

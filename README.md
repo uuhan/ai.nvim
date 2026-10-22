@@ -383,8 +383,10 @@ codex.md
 - Set `provider.stream = true` to stream normal answers and AIChat text.
   Stream text is buffered with `streaming.interval_ms` and
   `streaming.max_chars_per_flush` so large provider chunks render with a smoother
-  typewriter-like cadence. AIChat also supports streaming tool-call responses:
-  text deltas are shown first, while tool-call arguments are buffered until the
+  typewriter-like cadence. When rendering falls behind (a long answer, heavy
+  highlighting), flushes back off to fewer, larger updates. AIChat also
+  supports streaming tool-call responses: text deltas are shown first, while
+  tool-call arguments are buffered until the
   stream finishes and then dispatched. Patch and command preview requests stay
   non-streaming so the plugin can parse the complete result before previewing
   them.

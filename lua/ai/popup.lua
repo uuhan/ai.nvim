@@ -1,3 +1,4 @@
+local buffer = require("ai.buffer")
 local config = require("ai.config")
 
 local M = {
@@ -30,7 +31,7 @@ local function set_scratch_options(bufnr, filetype)
   vim.bo[bufnr].bufhidden = "hide"
   vim.bo[bufnr].swapfile = false
   vim.bo[bufnr].modifiable = true
-  vim.bo[bufnr].filetype = filetype or config.get().ui.filetype
+  buffer.set_filetype(bufnr, filetype or config.get().ui.filetype)
 end
 
 local function dimensions()
@@ -124,7 +125,7 @@ function M.set(bufnr, title, text, filetype)
 
   set_scratch_options(bufnr, filetype)
   pcall(vim.api.nvim_buf_set_name, bufnr, "ai://" .. title)
-  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, split_lines(text))
+  buffer.set_lines(bufnr, split_lines(text))
   vim.bo[bufnr].modifiable = false
   scroll_to_bottom(bufnr)
   return bufnr

@@ -1,3 +1,4 @@
+local buffer = require("ai.buffer")
 local client = require("ai.client")
 local config = require("ai.config")
 local stream_buffer = require("ai.stream_buffer")
@@ -50,7 +51,7 @@ local function scratch(bufnr, filetype, modifiable)
   vim.bo[bufnr].bufhidden = "hide"
   vim.bo[bufnr].swapfile = false
   vim.bo[bufnr].modifiable = modifiable ~= false
-  vim.bo[bufnr].filetype = filetype or "text"
+  buffer.set_filetype(bufnr, filetype or "text")
 end
 
 local function dimensions()
@@ -77,7 +78,7 @@ local function set_output(text)
     display_text = display_text .. pending_notice
   end
   vim.bo[M.output_bufnr].modifiable = true
-  vim.api.nvim_buf_set_lines(M.output_bufnr, 0, -1, false, split_lines(display_text))
+  buffer.set_lines(M.output_bufnr, split_lines(display_text))
   vim.bo[M.output_bufnr].modifiable = false
   if config.get().ui.auto_scroll and valid_window(M.output_winid) then
     local line_count = math.max(1, vim.api.nvim_buf_line_count(M.output_bufnr))

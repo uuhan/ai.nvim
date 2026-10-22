@@ -1,6 +1,11 @@
 local config = require("ai.config")
 
+local uv = vim.uv or vim.loop
+
 local M = {}
+
+-- Ceiling for the back-off in `pump`, so a slow buffer still visibly updates.
+local max_backoff_ms = 300
 
 local function positive_number(value, fallback)
   value = tonumber(value)
@@ -49,6 +54,8 @@ function M.new(opts)
   local scheduled = false
   local done_requested = false
   local closed = false
+  local delay_ms = stream_opts.interval_ms
+  local due = 0
 
   local renderer = {}
 
@@ -70,15 +77,25 @@ function M.new(opts)
       return
     end
 
+    -- Flush in proportion to the wait, so a backed-off stream keeps pace.
+    local budget = math.floor(stream_opts.max_chars_per_flush * delay_ms / stream_opts.interval_ms)
+
     if pending ~= "" then
       local chunk
-      chunk, pending = take_chars(pending, stream_opts.max_chars_per_flush)
+      chunk, pending = take_chars(pending, budget)
       visible = visible .. chunk
       emit_update()
       if closed then
         return
       end
     end
+
+    -- Time from when this flush was due until it finished: firing late or
+    -- rendering slowly both mean the event loop is busy (a large buffer, heavy
+    -- highlighting). Back off the next flush so slow rendering costs fewer
+    -- redraws rather than a stalled UI.
+    local busy_ms = math.max(0, (uv.hrtime() - due) / 1e6)
+    delay_ms = math.max(stream_opts.interval_ms, math.min(max_backoff_ms, math.floor(busy_ms * 2)))
 
     if pending ~= "" then
       renderer.schedule()
@@ -96,7 +113,8 @@ function M.new(opts)
       return
     end
     scheduled = true
-    vim.defer_fn(pump, stream_opts.interval_ms)
+    due = uv.hrtime() + delay_ms * 1e6
+    vim.defer_fn(pump, delay_ms)
   end
 
   function renderer.push(delta)

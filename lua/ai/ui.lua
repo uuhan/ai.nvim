@@ -1,3 +1,4 @@
+local buffer = require("ai.buffer")
 local config = require("ai.config")
 local context = require("ai.context")
 local patch = require("ai.patch")
@@ -31,7 +32,7 @@ local function set_scratch_options(bufnr, filetype)
   vim.bo[bufnr].bufhidden = "wipe"
   vim.bo[bufnr].swapfile = false
   vim.bo[bufnr].modifiable = true
-  vim.bo[bufnr].filetype = filetype or config.get().ui.filetype
+  buffer.set_filetype(bufnr, filetype or config.get().ui.filetype)
 end
 
 local function valid_window(winid)
@@ -221,7 +222,7 @@ function M.set_output(bufnr, title, text, filetype)
     lines = { "" }
   end
 
-  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+  buffer.set_lines(bufnr, lines)
   vim.bo[bufnr].modifiable = false
   scroll_to_bottom(bufnr)
   -- Clear any action hint left over from a previous command/patch preview so a
